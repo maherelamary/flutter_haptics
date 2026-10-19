@@ -1,0 +1,55 @@
+{
+  "Version": 1,
+  "Metadata": {
+    "Project": "flutter_haptics example",
+    "Created": "2026-09-10",
+    "Description": "A struck spring: one sharp hit, then a wobble that decays."
+  },
+  "Pattern": [
+    {
+      "Event": {
+        "Time": 0.0,
+        "EventType": "HapticTransient",
+        "EventParameters": [
+          { "ParameterID": "HapticIntensity", "ParameterValue": 1.0 },
+          { "ParameterID": "HapticSharpness", "ParameterValue": 0.9 }
+        ]
+      }
+    },
+    {
+      "Event": {
+        "Time": 0.02,
+        "EventType": "HapticContinuous",
+        "EventDuration": 0.6,
+        "EventParameters": [
+          { "ParameterID": "HapticIntensity", "ParameterValue": 1.0 },
+          { "ParameterID": "HapticSharpness", "ParameterValue": 0.0 }
+        ]
+      }
+    },
+    {
+      "ParameterCurve": {
+        "ParameterID": "HapticIntensityControl",
+        "Time": 0.02,
+        "ParameterCurveControlPoints": [
+          { "Time": 0.02, "ParameterValue": 0.9 },
+          { "Time": 0.12, "ParameterValue": 0.35 },
+          { "Time": 0.22, "ParameterValue": 0.6 },
+          { "Time": 0.34, "ParameterValue": 0.2 },
+          { "Time": 0.46, "ParameterValue": 0.35 },
+          { "Time": 0.62, "ParameterValue": 0.0 }
+        ]
+      }
+    },
+    {
+      "ParameterCurve": {
+        "ParameterID": "HapticSharpnessControl",
+        "Time": 0.02,
+        "ParameterCurveControlPoints": [
+          { "Time": 0.02, "ParameterValue": 0.6 },
+          { "Time": 0.62, "ParameterValue": 0.1 }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+name: flutter_haptics
+description: Haptic feedback for Flutter — composable patterns with parameter curves, plus iOS and Android's own haptic constants and the intents that pair them.
+version: 1.0.0
+homepage: https://github.com/maherelamary/flutter_haptics
+repository: https://github.com/maherelamary/flutter_haptics
+issue_tracker: https://github.com/maherelamary/flutter_haptics/issues
+
+topics:
+  - haptics
+  - haptic-feedback
+  - vibration
+  - core-haptics
+
+environment:
+  sdk: ^3.9.2
+  flutter: '>=3.35.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.linkdev.flutter_haptics
+        pluginClass: FlutterHapticsPlugin
+      ios:
+        pluginClass: FlutterHapticsPlugin
