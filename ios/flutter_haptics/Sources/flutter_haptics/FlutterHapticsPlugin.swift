@@ -56,12 +56,20 @@ public class FlutterHapticsPlugin: NSObject, FlutterPlugin {
                 result(nil)
             }
 
+        // Reports an unknown id rather than swallowing it, so a handle whose
+        // registration was lost can fall back to sending the pattern.
         case "playRegistered":
-            if let id = registrationId(call) {
-                coreHaptics?.playRegistered(id)
-                feedbackGenerators?.playRegistered(id)
+            guard let id = registrationId(call) else {
+                result(NativeAnswer.failed("no registration id given").asDictionary)
+                return
             }
-            result(nil)
+            let played = (coreHaptics?.playRegistered(id) ?? false)
+                || (feedbackGenerators?.playRegistered(id) ?? false)
+            result(
+                played
+                    ? NativeAnswer.played().asDictionary
+                    : NativeAnswer.failed("no registration \(id) on this plugin").asDictionary
+            )
 
         case "unregister":
             if let id = registrationId(call) {

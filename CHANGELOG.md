@@ -1,3 +1,191 @@
+## 2.0.0
+
+Four breaking changes, two in the API an app calls and two in the platform
+interface. Most of them come from building an app on 1.0.0 and finding the
+API answered a question with silence.
+
+### `HapticIntent` arms are now `HapticArm`
+
+In 1.0.0 an arm was a nullable constant, which made `null` carry two
+unrelated meanings: *this platform has nothing for this* and *I have not
+decided yet*. An arm is now one of three things, each a statement:
+
+```dart
+static const saved = HapticIntent(
+  ios: HapticArm.native(IOSHaptic.notificationSuccess),
+  android: HapticArm.native(AndroidHaptic.confirm),
+  pattern: HapticPatterns.success,
+);
+
+static const caution = HapticIntent(
+  ios: HapticArm.native(IOSHaptic.notificationWarning),
+  android: HapticArm.pattern(),   // Android names no warning — chosen, not fallen back to
+  pattern: HapticPatterns.warning,
+);
+
+static const toggledOn = HapticIntent(
+  ios: HapticArm.silent(),        // iOS has no toggle feedback
+  android: HapticArm.native(AndroidHaptic.toggleOn),
+  pattern: HapticPatterns.mediumTap,
+);
+```
+
+**Migrating:** wrap each constant in `HapticArm.native(…)`, replace `null`
+with `HapticArm.silent()`, and supply both arms — they are required now, so
+an intent that does not say what iOS does no longer compiles.
+
+The arms stay typed, so `ios:` still takes only an `IOSHaptic` and
+`android:` only an `AndroidHaptic`.
+
+`HapticArm.pattern()` is new, and is the point of the change: a pattern
+*chosen* because the platform names nothing for this meaning is a different
+statement from a pattern *recovered* after a native route could not be
+delivered. Both still play the same pattern and report `HapticRoute.pattern`;
+the difference now lives in the intent, where it is readable.
+
+`HapticIntent.routeFor(platform)` is replaced by `armFor(platform)`, which
+returns the arm rather than the constant.
+
+### `register` returns a handle synchronously, and paces it
+
+```dart
+final _tick = FlutterHaptics.register(HapticPatterns.selection);
+```
+
+`register` no longer returns a `Future`, so a handle can be a field
+initialiser or built in `initState` without an `await` or a nullable field.
+Registration still happens natively; it now runs in the background, and a
+`play` that arrives before it finishes waits for it.
+
+**Migrating:** drop the `await`. A `Future<HapticHandle>` field becomes a
+plain `HapticHandle`.
+
+A handle also will not replay faster than `minInterval`, which defaults to
+the device's reported fidelity — 25 ms at `full`, 35 at `intensity`, 60 at
+`rhythm`, 40 until the query resolves — never to which platform it is. Taps
+closer together than the actuator can separate smear into a buzz rather than
+reading as separate taps, and every one still crosses the channel. Paced-out
+calls return `HapticRoute.none`. Pass `minInterval: Duration.zero` for the
+1.0.0 behaviour.
+
+Pacing reads the time through `package:clock`, which is a new dependency and
+the one `testWidgets` advances when a test pumps. Measuring with
+`DateTime.now()` would have paced out the second haptic in any widget test
+that pumps between two plays, flakily, depending on the machine.
+
+One consequence to know about: a bare `await tester.pump()` advances that
+clock by *zero*, so two taps a bare pump apart are one tap as far as a
+handle is concerned. Pump a realistic gap, or register with
+`minInterval: Duration.zero` in tests that only care that a haptic was
+asked for.
+
+`HapticHandle.ready` completes once the platform has answered and
+`minInterval` has settled. Nothing has to await it — `play` works from the
+first frame — but a UI that *displays* what the handle resolved to needs it.
+
+Declare a handle with a plain `final`, not `late final`: a lazy field does
+not register until the first play, which is the round trip the handle exists
+to avoid.
+
+### Breaking for anything implementing `FlutterHapticsPlatform`
+
+Both matter only if you wrap or substitute the seam — a tracer, a decorator,
+a custom implementation. An app that only calls `FlutterHaptics` is
+unaffected.
+
+- `playRegistered` returns `Future<NativeResult>` instead of `Future<void>`.
+  It has to report an id it no longer holds, or a handle whose registration
+  was lost can never fall back.
+- `noteIntent(HapticIntent)` is new, with a no-op default so existing
+  implementations still compile. **A wrapper must forward it**, or
+  `perform` stops being observable through that wrapper and nothing says so.
+
+### Added
+
+- `FlutterHaptics.onFailureReport` sends failures to a logger or crash
+  reporter of your own. It replaces `onFailure` entirely while set, so a
+  release build can record what is not being felt in the field.
+- Failures are now reported **once per distinct `(request, reason)`**. A
+  haptic firing on every frame of a drag used to bury the console in one
+  repeated line that said nothing new. `HapticFailureMode.throwIt` is
+  exempt and always throws.
+- `FakeHapticsPlatform.intents` records every intent `perform` was given,
+  before the arm is resolved, so a test can assert on the meaning an app
+  asked for and not only on what the device made of it.
+- `FakeHapticsPlatform` now applies its configured `support` the way the real
+  platforms do, to patterns as well as constants: a `rhythm`-tier actuator
+  declines a constant asked for through `perform`, which has a pattern to
+  recover with, while `playSystem` still plays it; a device reporting
+  `HapticFidelity.none` plays nothing at all; and one that cannot sustain a
+  rumble refuses a pattern made only of continuous events, as iPhone 7 does.
+  Until now `play` always succeeded, so a failing pattern was not testable
+  at all.
+- `FakeHapticsPlatform.debugLoseRegistrations()` drops every live
+  registration without telling the handles holding them, which is what
+  Android does when the plugin detaches from its engine.
+- `HapticFailure` carries the thing that failed — `pattern` or `haptic` —
+  as well as the sentence describing it. Patterns have no names, so two
+  different ones can describe themselves identically; a crash reporter that
+  needs to tell them apart no longer has to parse `request`.
+
+### Fixed
+
+- A handle whose native registration had been lost — Android clears them when
+  the plugin detaches from its engine — fell silent instead of falling back to
+  `play`. Both platforms returned success for an unknown id, which made the
+  fallback unreachable; they now report it, and the handle forgets the dead id
+  rather than paying a round trip to rediscover it on every later play.
+- `HapticHandle.play` could outlive `dispose`: a play waiting on registration
+  carried on afterwards and played the pattern. It returns
+  `HapticRoute.none` now.
+- `FakeHapticsPlatform.clear()` made every live handle look lost, because the
+  `registrations` record also decided whether a replay succeeded, and
+  `unregister` did not invalidate an id at all. Liveness is tracked
+  separately now, so clearing the record leaves handles alone and releasing
+  one stops it replaying.
+- Failures were deduplicated by a request name that identified a pattern only
+  by its event count, so `success` and `error` failing the same way reported
+  once between them. Patterns are keyed by value now, and the message carries
+  the duration as well.
+- `HapticArm` equality was not symmetric: `a == b` and `b == a` could differ
+  when one side's type argument was more general, and `hashCode` then
+  disagreed with `==`.
+- `Ahap.decode` threw `UnsupportedError` — again invisible to a caller
+  catching `FormatException` — on a non-finite number. `"NaN"`, `"Infinity"`
+  and the perfectly legal JSON literal `1e400` all parse to one, and a
+  non-finite number of seconds throws out of the rounding that builds a
+  `Duration`. Such a value is now read as absent, and the field's own default
+  applies.
+- `Ahap.decode` threw a `TypeError` on a file whose `"Time"` is written as a
+  string, which callers catching `FormatException` never saw. Numbers written
+  as strings are now parsed wherever the decoder reads one — event `Time` and
+  `EventDuration`, `ParameterValue`, curve `Time` and control points — rather
+  than being skipped. A curve whose `Time` cannot be read at all starts where
+  its first control point does.
+- `HapticPatterns.buzz` and `longBuzz` are `const`, like the other seventeen.
+
+### Not in this release
+
+- **Handles hold patterns only.** `register` does not take a `HapticIntent`
+  or a system constant yet, so pacing covers `play` and not `perform` or
+  `playSystem`. An app pacing those still needs its own throttle. Next.
+- A `HapticRoute.pattern` still does not say on its own whether the pattern
+  was chosen or recovered. The intent says, which covers reading the source;
+  an observer hook that reports it at runtime is not here yet.
+
+### Docs
+
+- The tier table was wrong in three places: Android 7 is always `rhythm`
+  whatever motor it has, since `VibrationEffect` only arrived in API 26;
+  iPhone 7 *drops* rumbles and curves rather than approximating them; and
+  below 0.15 intensity an on/off actuator plays nothing at all.
+- Overlapping events flatten two different ways on Android, and the README
+  only described one. On the envelope and waveform tiers the loudest wins; on
+  the composition tier there is no timeline to sample, so overlapping taps
+  are played back to back instead. Overlay rumbles freely; treat overlapping
+  taps as a sequence.
+- `HapticPatterns` holds nineteen patterns, not "20+".
+
 ## 1.0.0
 
 First release.
@@ -42,7 +230,7 @@ purpose.
 - `HapticPattern` from transient and continuous events, with intensity and
   sharpness that may follow curves over the life of an event.
 - `HapticPatternBuilder` for building one fluently, and `HapticPatterns` for
-  twenty ready-made ones.
+  nineteen ready-made ones.
 - Composition with `then`, `overlay`, `repeat`, `scaled` and the `+` and `|`
   operators, plus `HapticPattern.forPlatform` for per-platform tuning.
 - `Ahap.decode` / `encode` / `loadAsset` read and write Apple's `.ahap`

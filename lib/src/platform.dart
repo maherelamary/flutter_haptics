@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import 'haptic_intent.dart';
 import 'haptic_pattern.dart';
 import 'haptic_support.dart';
 import 'system_haptic.dart';
@@ -87,10 +88,10 @@ abstract class FlutterHapticsPlatform {
 
   /// Replay a pattern prepared by [register].
   ///
-  /// The one method here that may throw: a registration can be lost — a
-  /// rebuilt engine, a detached plugin — and [HapticHandle] reads that as the
-  /// signal to send the pattern the long way instead.
-  Future<void> playRegistered(int id);
+  /// Reports a lost registration — a rebuilt engine, a detached plugin —
+  /// rather than succeeding silently, which is what lets [HapticHandle] fall
+  /// back to sending the pattern the long way.
+  Future<NativeResult> playRegistered(int id);
 
   /// Release a pattern prepared by [register].
   Future<void> unregister(int id);
@@ -100,6 +101,16 @@ abstract class FlutterHapticsPlatform {
 
   /// Stop whatever is playing.
   Future<void> stop();
+
+  /// Told about every intent handed to [FlutterHaptics.perform], before it
+  /// is routed and before [FlutterHaptics.enabled] is consulted.
+  ///
+  /// Nothing on a device needs this — the arm has already been resolved into
+  /// a `play` or a `playSystem` by the time anything reaches the actuator.
+  /// It exists so a test double can assert on the *meaning* an app asked for
+  /// rather than reconstructing it from what the arm happened to resolve to.
+  /// See [FakeHapticsPlatform.intents].
+  void noteIntent(HapticIntent intent) {}
 }
 
 /// The real implementation: one method channel, shared by both platforms.
@@ -163,8 +174,8 @@ class MethodChannelHaptics extends FlutterHapticsPlatform {
   }
 
   @override
-  Future<void> playRegistered(int id) =>
-      channel.invokeMethod<void>('playRegistered', {'id': id});
+  Future<NativeResult> playRegistered(int id) =>
+      _ask('playRegistered', {'id': id});
 
   @override
   Future<void> unregister(int id) async {

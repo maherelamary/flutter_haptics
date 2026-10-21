@@ -78,9 +78,13 @@ final class CoreHapticsRenderer {
 
     /// Replays a registered pattern. Identical to [play] from here on, so a
     /// handle and a plain play feel the same — only cheaper to get to.
-    func playRegistered(_ id: Int) {
-        guard let pattern = registeredPatterns[id] else { return }
+    /// Returns whether the id was known, so a handle whose registration was
+    /// lost can fall back to sending the pattern.
+    @discardableResult
+    func playRegistered(_ id: Int) -> Bool {
+        guard let pattern = registeredPatterns[id] else { return false }
         start(pattern)
+        return true
     }
 
     func unregister(_ id: Int) {

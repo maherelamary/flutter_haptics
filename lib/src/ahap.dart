@@ -355,13 +355,38 @@ abstract final class Ahap {
       if (entry is! Map) continue;
       final id = entry['ParameterID'];
       final value = entry['ParameterValue'];
-      if (id is String && value is num) parameters[id] = value.toDouble();
+      final parsed = _asDouble(value);
+      if (id is String && parsed != null) parameters[id] = parsed;
     }
     return parameters;
   }
 
-  static double? _seconds(Object? raw) =>
-      raw is num ? raw.toDouble() : null;
+  static double? _seconds(Object? raw) => _asDouble(raw);
+
+  /// Reads a number that may have been written as a string.
+  ///
+  /// AHAP is JSON, so every number in a hand-written or exported file is
+  /// *meant* to be a JSON number — but quoted numbers turn up in the wild,
+  /// and a file that is otherwise valid should not lose an event over a pair
+  /// of quotes. Anything unreadable is `null`, and the caller decides whether
+  /// that means a default or a skipped event.
+  ///
+  /// NaN and the infinities are unreadable too, from either form. JSON has no
+  /// literal for them, but `"NaN"` parses to one and so does `1e400` — even
+  /// unquoted, since `jsonDecode` yields `Infinity` for it. A non-finite
+  /// number of seconds then throws `UnsupportedError` out of the `.round()`
+  /// that builds a [Duration], which a caller catching [FormatException]
+  /// would never see: the same class of surprise as the `TypeError` this
+  /// helper replaced. Rejected here, such a value is simply absent, and the
+  /// field's own default applies.
+  static double? _asDouble(Object? raw) {
+    final value = switch (raw) {
+      final num value => value.toDouble(),
+      final String value => double.tryParse(value),
+      _ => null,
+    };
+    return value != null && value.isFinite ? value : null;
+  }
 
   /// AHAP counts in seconds; this package counts in [Duration].
   static Duration _duration(double seconds) =>
@@ -399,18 +424,20 @@ class _Curve {
     final points = <(double, double)>[];
     for (final entry in raw) {
       if (entry is! Map) continue;
-      final time = entry['Time'];
-      final value = entry['ParameterValue'];
-      if (time is num && value is num) {
-        points.add((time.toDouble(), value.toDouble()));
-      }
+      final time = Ahap._asDouble(entry['Time']);
+      final value = Ahap._asDouble(entry['ParameterValue']);
+      if (time != null && value != null) points.add((time, value));
     }
     if (points.isEmpty) return null;
     points.sort((a, b) => a.$1.compareTo(b.$1));
 
+    // A curve with no usable `Time` starts where its first point does, which
+    // is where Core Haptics would put it anyway. Read rather than cast: a
+    // file with `"Time": "0.5"` used to throw a TypeError, which callers
+    // catching FormatException never saw.
     return _Curve(
       parameterId: id,
-      time: (map['Time'] as num?)?.toDouble() ?? points.first.$1,
+      time: Ahap._asDouble(map['Time']) ?? points.first.$1,
       points: points,
     );
   }

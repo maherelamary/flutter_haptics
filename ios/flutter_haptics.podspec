@@ -4,7 +4,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'flutter_haptics'
-  s.version          = '1.0.0'
+  s.version          = '2.0.0'
   s.summary          = 'A powerful, type-safe haptic feedback plugin for Flutter using Core Haptics.'
   s.description      = <<-DESC
 A type-safe haptic feedback plugin for Flutter. Compose haptic patterns with

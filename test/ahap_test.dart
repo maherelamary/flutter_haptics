@@ -78,6 +78,109 @@ void main() {
       expect(points.map((p) => p['value']), [0.2, 0.9, 0.0]);
     });
 
+    test('numbers written as strings are read, not skipped', () {
+      // Exported AHAP in the wild quotes numbers. Casting threw a TypeError,
+      // which a caller catching FormatException never saw — and merely not
+      // throwing would have dropped the values instead.
+      final pattern = Ahap.decode('''
+      {
+        "Pattern": [
+          { "Event": {
+              "Time": "0.5",
+              "EventType": "HapticContinuous",
+              "EventDuration": "1.0",
+              "EventParameters": [
+                { "ParameterID": "HapticIntensity", "ParameterValue": "1.0" }
+              ] } },
+          { "ParameterCurve": {
+              "ParameterID": "HapticIntensityControl",
+              "Time": "0.5",
+              "ParameterCurveControlPoints": [
+                { "Time": "0.5", "ParameterValue": "0.2" },
+                { "Time": "1.5", "ParameterValue": "1.0" }
+              ] } }
+        ]
+      }''');
+
+      final event = pattern.events.single as ContinuousEvent;
+      expect(event.delay, const Duration(milliseconds: 500));
+      expect(event.duration, const Duration(seconds: 1));
+      expect(
+        event.intensity.toControlPoints().map((p) => p['value']),
+        [0.2, 1.0],
+      );
+    });
+
+    test('NaN and the infinities are read as absent, not carried', () {
+      // Each of these parses to a double that throws UnsupportedError out of
+      // Duration's .round() — invisible to a caller catching
+      // FormatException. `1e400` is a legal JSON number literal, so this is
+      // not only about quoted values.
+      for (final time in ['"NaN"', '"Infinity"', '1e400', '"1e400"']) {
+        HapticPattern decode() => Ahap.decode('''
+        {
+          "Pattern": [
+            { "Event": {
+                "Time": $time,
+                "EventType": "HapticTransient",
+                "EventParameters": [
+                  { "ParameterID": "HapticIntensity", "ParameterValue": 1.0 }
+                ] } }
+          ]
+        }''');
+
+        expect(decode, returnsNormally, reason: 'Time was $time');
+        // Unreadable means absent, so the event lands at AHAP's own default.
+        final event = decode().events.single as TransientEvent;
+        expect(event.delay, Duration.zero, reason: time);
+      }
+    });
+
+    test('a continuous event with a non-finite duration is skipped', () {
+      final pattern = Ahap.decode('''
+      {
+        "Pattern": [
+          { "Event": {
+              "Time": 0,
+              "EventType": "HapticContinuous",
+              "EventDuration": "Infinity",
+              "EventParameters": [
+                { "ParameterID": "HapticIntensity", "ParameterValue": 1.0 }
+              ] } }
+        ]
+      }''');
+
+      expect(pattern.events, isEmpty);
+    });
+
+    test('a curve whose Time is unreadable starts at its first point', () {
+      final pattern = Ahap.decode('''
+      {
+        "Pattern": [
+          { "Event": {
+              "Time": 0,
+              "EventType": "HapticContinuous",
+              "EventDuration": 1.0,
+              "EventParameters": [
+                { "ParameterID": "HapticIntensity", "ParameterValue": 1.0 }
+              ] } },
+          { "ParameterCurve": {
+              "ParameterID": "HapticIntensityControl",
+              "Time": "not a number",
+              "ParameterCurveControlPoints": [
+                { "Time": 0.0, "ParameterValue": 0.2 },
+                { "Time": 1.0, "ParameterValue": 1.0 }
+              ] } }
+        ]
+      }''');
+
+      final event = pattern.events.single as ContinuousEvent;
+      expect(
+        event.intensity.toControlPoints().map((p) => p['value']),
+        [0.2, 1.0],
+      );
+    });
+
     test('intensity control multiplies the event intensity', () {
       // Event intensity 0.5, curve peaking at 1.0 -> effective peak 0.5.
       final pattern = Ahap.decode('''

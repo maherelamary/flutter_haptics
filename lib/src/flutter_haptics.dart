@@ -47,8 +47,30 @@ abstract final class FlutterHaptics {
   /// [HapticFailureMode.silent] in a release build, so a haptic that quietly
   /// does nothing shows up while you are building it rather than on someone
   /// else's phone.
+  ///
+  /// Each distinct `(request, reason)` is reported once per run. A haptic
+  /// firing on every frame of a drag would otherwise bury the console in one
+  /// repeated line, and the repeat says nothing new — the device's
+  /// limitations do not change mid-session. [HapticFailureMode.throwIt] is
+  /// the exception and always throws.
   static HapticFailureMode onFailure =
       kDebugMode ? HapticFailureMode.log : HapticFailureMode.silent;
+
+  /// Send failures somewhere of your own instead of the console.
+  ///
+  /// When set this replaces [onFailure] entirely — nothing is printed and
+  /// nothing is thrown, whatever the mode says — so a release build can
+  /// record what is not being felt in the field:
+  ///
+  /// ```dart
+  /// FlutterHaptics.onFailureReport = (failure) {
+  ///   FirebaseCrashlytics.instance.log('$failure');
+  /// };
+  /// ```
+  ///
+  /// Called once per distinct `(request, reason)`, on the same deduplication
+  /// as the log, so a reporter cannot be flooded either.
+  static HapticFailureReporter? onFailureReport;
 
   static Future<HapticSupport>? _support;
 
@@ -76,7 +98,12 @@ abstract final class FlutterHaptics {
     final result = await FlutterHapticsPlatform.instance.play(pattern);
     if (result.played) return HapticRoute.pattern;
 
-    _failed('play(${pattern.events.length} events)', result.reason);
+    _failed(
+      'play(${pattern.events.length} events, '
+      '${pattern.duration.inMilliseconds}ms)',
+      result.reason,
+      pattern: pattern,
+    );
     return HapticRoute.none;
   }
 
@@ -105,6 +132,7 @@ abstract final class FlutterHaptics {
         'playSystem(${haptic.name})',
         'it belongs to ${haptic.platform.name}, this is '
             '${defaultTargetPlatform.name} — perform() is what crosses platforms',
+        haptic: haptic,
       );
       return HapticRoute.none;
     }
@@ -116,51 +144,86 @@ abstract final class FlutterHaptics {
         .playSystem(haptic, requirePerceptible: false);
     if (result.played) return HapticRoute.system;
 
-    _failed('playSystem(${haptic.name})', result.reason);
+    _failed('playSystem(${haptic.name})', result.reason, haptic: haptic);
     return HapticRoute.none;
   }
 
-  /// Play an intent: this platform's own feedback where you declared one, the
-  /// intent's pattern where it could not be delivered.
+  /// Play an intent — what this platform's arm says to do.
   ///
-  /// Returns [HapticRoute.system] when the platform's own feedback played,
-  /// [HapticRoute.pattern] when the recovery did, and [HapticRoute.none] when
-  /// the intent asks for nothing on this platform — a `null` arm is a
-  /// deliberate silence, not a failure, and is never reported.
+  /// Each arm resolves to exactly one outcome:
+  ///
+  /// | Arm | Result |
+  /// |---|---|
+  /// | [HapticArm.native], delivered | [HapticRoute.system] |
+  /// | [HapticArm.native], not delivered | [HapticRoute.pattern] — recovered |
+  /// | [HapticArm.pattern] | [HapticRoute.pattern] — chosen |
+  /// | [HapticArm.silent] | [HapticRoute.none] |
+  ///
+  /// A chosen pattern and a recovered one both report
+  /// [HapticRoute.pattern]; which it was is written in the intent.
   static Future<HapticRoute> perform(HapticIntent intent) async {
+    // Noted before the switch, and before `enabled` is consulted: this
+    // records what the app asked for, which is a fact about the app and not
+    // about the device or the user's settings.
+    FlutterHapticsPlatform.instance.noteIntent(intent);
     if (!enabled) return HapticRoute.none;
 
-    final route = intent.routeFor(defaultTargetPlatform);
-    // Nothing was asked for here, so there is nothing to recover from.
-    if (route == null) return HapticRoute.none;
+    final arm = intent.armFor(defaultTargetPlatform);
 
-    // requirePerceptible: this verb is asked to make a *meaning* felt, and it
-    // carries a pattern this package knows works. Where the native route may
-    // be accepted without being rendered, the pattern is the safer answer.
-    final result = await FlutterHapticsPlatform.instance
-        .playSystem(route, requirePerceptible: true);
-    if (result.played) return HapticRoute.system;
+    switch (arm) {
+      // No implementation for this platform at all.
+      case null:
+      // Nothing is meant to happen here, so nothing does. Not a failure, and
+      // the pattern is deliberately not consulted.
+      case SilentArm():
+        return HapticRoute.none;
 
-    // Asked for and not delivered — this is what the pattern is for. The
-    // decline itself is not reported: the intent did what it promised.
-    return play(intent.pattern);
+      // The pattern is the answer here, not a consolation for missing one.
+      case PatternArm():
+        return play(intent.pattern);
+
+      case NativeArm(haptic: final haptic):
+        // requirePerceptible: this verb is asked to make a *meaning* felt and
+        // carries a pattern this package knows works, so where the native
+        // route may be accepted without being rendered, the pattern wins.
+        final result = await FlutterHapticsPlatform.instance
+            .playSystem(haptic, requirePerceptible: true);
+        if (result.played) return HapticRoute.system;
+
+        // Asked for and not delivered — this is what the pattern is for. The
+        // decline is not reported: the intent did what it promised.
+        return play(intent.pattern);
+    }
   }
 
-  /// Hand a pattern to the platform once, so it can be replayed cheaply.
+  /// Hand a pattern to the platform once, so it can be replayed cheaply and
+  /// no faster than the actuator can separate.
   ///
   /// [play] rebuilds a pattern natively on every call. For anything fired
   /// repeatedly — a picker tick, a step counter, a game loop — register it
-  /// instead and play the handle.
+  /// instead and play the handle:
   ///
-  /// Always returns a usable [HapticHandle]. Where the platform cannot hold a
-  /// prepared pattern, the handle falls back to [play] and reports
+  /// ```dart
+  /// final tick = FlutterHaptics.register(HapticPatterns.selection);
+  /// void onItemChanged() => tick.play();
+  /// ...
+  /// tick.dispose();
+  /// ```
+  ///
+  /// Returns synchronously so a handle can be built in `initState` or a field
+  /// initialiser. Registration runs in the background; a [HapticHandle.play]
+  /// that arrives first waits for it.
+  ///
+  /// [minInterval] is the floor on how often the handle will replay. It
+  /// defaults to the device's own fidelity — see [HapticHandle] for the
+  /// table — never to which platform it is. Pass [Duration.zero] to fire
+  /// every call.
+  ///
+  /// Always returns a usable handle. Where the platform cannot hold a
+  /// prepared pattern it falls back to [play] and reports
   /// `isPrepared == false`, so a caller never needs to branch.
-  static Future<HapticHandle> register(HapticPattern pattern) async {
-    if (pattern.events.isEmpty) return HapticHandle.internal(null, pattern);
-
-    final id = await FlutterHapticsPlatform.instance.register(pattern);
-    return HapticHandle.internal(id, pattern);
-  }
+  static HapticHandle register(HapticPattern pattern, {Duration? minInterval}) =>
+      HapticHandle.internal(pattern, minInterval);
 
   /// Prepare the haptic engine for playback.
   ///
@@ -174,11 +237,52 @@ abstract final class FlutterHaptics {
   /// something already running.
   static Future<void> stop() => FlutterHapticsPlatform.instance.stop();
 
-  static void _failed(String request, String reason) =>
-      reportHapticFailure(onFailure, request: request, reason: reason);
+  /// Failures already reported, so a per-frame haptic cannot flood the log.
+  ///
+  /// A device that cannot play something will not start being able to
+  /// halfway through a session, so the second identical report carries no
+  /// information. The same call failing for a *new* reason is news, and is
+  /// said again.
+  ///
+  /// Keyed by the thing that failed rather than the sentence describing it:
+  /// patterns have no names, and two different ones can read the same.
+  /// Records, patterns and system haptics all compare by value, and a [Set]
+  /// settles a hash collision with `==`, so two distinct subjects can never
+  /// collapse into one report.
+  static final Set<(Object subject, String reason)> _reported = {};
+
+  static void _failed(
+    String request,
+    String reason, {
+    HapticPattern? pattern,
+    SystemHaptic? haptic,
+  }) {
+    final reporter = onFailureReport;
+    final failure = HapticFailure(
+      request: request,
+      reason: reason,
+      pattern: pattern,
+      haptic: haptic,
+    );
+
+    // Throwing is never deduplicated: a swallowed second throw would be a
+    // worse surprise than a repeated one.
+    if (reporter == null && onFailure == HapticFailureMode.throwIt) {
+      throw failure;
+    }
+
+    if (!_reported.add((pattern ?? haptic ?? request, reason))) return;
+
+    reportHapticFailure(onFailure, failure: failure, reporter: reporter);
+  }
 
   /// Drops the cached [support] result so the next read queries the platform
   /// again. Only useful in tests.
   @visibleForTesting
   static void debugResetSupportCache() => _support = null;
+
+  /// Forgets which failures have already been reported, so the next one is
+  /// said again. Only useful in tests.
+  @visibleForTesting
+  static void debugResetFailureLog() => _reported.clear();
 }

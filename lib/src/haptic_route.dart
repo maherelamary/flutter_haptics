@@ -8,12 +8,17 @@ enum HapticRoute {
   /// `HapticFeedbackConstants` value on Android.
   system,
 
-  /// A [HapticPattern] played through this package's renderer. Either a
-  /// direct [FlutterHaptics.play], or a [HapticIntent] recovering from a
-  /// native route it could not get.
+  /// A [HapticPattern] played through this package's renderer.
+  ///
+  /// Three things arrive here: a direct [FlutterHaptics.play], an intent
+  /// whose arm is [HapticArm.pattern] — the pattern chosen, because the
+  /// platform names nothing for that meaning — and an intent recovering from
+  /// a [HapticArm.native] route it could not get. The last two are told
+  /// apart by the intent, not by this value.
   pattern,
 
-  /// Nothing played. Haptics are switched off, the value belongs to another
-  /// platform, no route was asked for, or the device cannot do it.
+  /// Nothing played. Haptics are switched off, the arm for this platform is
+  /// [HapticArm.silent], the value belongs to another platform, a handle's
+  /// pacing dropped the call, or the device cannot do it.
   none,
 }

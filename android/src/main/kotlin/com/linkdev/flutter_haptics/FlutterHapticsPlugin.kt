@@ -107,9 +107,15 @@ class FlutterHapticsPlugin :
                 result.success(runCatching { handleRegister(call) }.getOrNull())
             }
 
+            // Reports an unknown id rather than swallowing it, so a handle
+            // whose registration was lost can fall back to sending the
+            // pattern. Silently succeeding made that fallback unreachable.
             "playRegistered" -> {
-                runCatching { handlePlayRegistered(call) }
-                result.success(null)
+                result.success(
+                    runCatching { handlePlayRegistered(call) }
+                        .getOrElse { NativeAnswer.failed("$it") }
+                        .toMap(),
+                )
             }
 
             "unregister" -> {
@@ -173,9 +179,16 @@ class FlutterHapticsPlugin :
         return id
     }
 
-    private fun handlePlayRegistered(call: MethodCall) {
-        val plan = registered[call.idArgument() ?: return] ?: return
-        dispatch(vibrator() ?: return, plan)
+    private fun handlePlayRegistered(call: MethodCall): NativeAnswer {
+        val id = call.idArgument()
+            ?: return NativeAnswer.failed("no registration id given")
+        val plan = registered[id]
+            ?: return NativeAnswer.failed("no registration $id on this plugin")
+        val vibrator = vibrator()
+            ?: return NativeAnswer.failed("no vibrator on this device")
+
+        dispatch(vibrator, plan)
+        return NativeAnswer.played()
     }
 
     private fun MethodCall.idArgument(): Int? =

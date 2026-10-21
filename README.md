@@ -9,7 +9,7 @@ A powerful, type-safe haptic feedback library for Flutter. Create rich, customiz
 
 - **Pattern-based API** - Haptics are defined as composable, reusable patterns
 - **Parameter curves** - Intensity and sharpness can change over time (fade in, fade out, pulse, etc.)
-- **Built-in patterns** - 20+ ready-to-use patterns for common use cases
+- **Built-in patterns** - 19 ready-to-use patterns for common use cases
 - **Fluent builder** - Create complex patterns with an intuitive builder API
 - **Type-safe** - Full compile-time type safety with sealed classes
 - **Both vocabularies** - all 9 iOS kinds and all 20 Android constants, named
@@ -21,7 +21,8 @@ A powerful, type-safe haptic feedback library for Flutter. Create rich, customiz
 - **App-wide switch** - Honour a "Haptics" setting without guarding call sites
 - **AHAP files** - Read and write Apple's pattern format, so designer tools and
   pattern serialisation both work
-- **Registered handles** - Hand a pattern to the platform once and replay it
+- **Registered handles** - Hand a pattern to the platform once, replay it
+  cheaply, and never faster than the actuator can separate
 - **Testable** - Swap the platform for a recorder; assert on haptics like any
   other behaviour
 - **Silent fail** - Gracefully handles unsupported devices without throwing errors
@@ -35,12 +36,12 @@ you never write a platform check.
 | Platform | What plays | Survives | `fidelity` |
 |----------|------------|----------|------------|
 | iOS 15+ (iPhone 8 and later) | Core Haptics | intensity, sharpness, curves | `full` |
-| iOS 15+ (iPhone 7) | UIKit feedback generators | tap intensity and feel | `intensity` |
+| iOS 15+ (iPhone 7) | UIKit feedback generators | tap intensity; rumbles are **dropped** | `intensity` |
 | Android 16+, envelope-capable hardware | Intensity/sharpness envelopes | intensity, sharpness, curves | `full` |
-| Android 11+ | Composition primitives | tap intensity and feel | `intensity` |
+| Android 11+ with composition primitives | Composition primitives | tap intensity and feel | `intensity` |
 | Android 8+ with amplitude control | Amplitude waveform | intensity, rhythm | `intensity` |
-| Any Android without amplitude control | On/off waveform | rhythm | `rhythm` |
-| Android 7 | Legacy waveform | rhythm | `rhythm` |
+| Android 8+ without amplitude control | On/off waveform | rhythm | `rhythm` |
+| Android 7 (API 24–25) | Legacy waveform | rhythm | `rhythm` |
 | No vibrator, or haptics unsupported | Nothing | — | `none` |
 
 Fidelity falls off down that list: sharpness is the first thing to go, then
@@ -48,10 +49,21 @@ intensity, leaving rhythm. Design your patterns on the tier you care about most
 and they will still read as *something* everywhere else. Ask the device which
 tier it reached with [`FlutterHaptics.support`](#capability-detection).
 
-Two of those rows are about **hardware, not Android version**. A device with a
-rotary (ERM) motor reports no amplitude control and no composition primitives
-at any API level, so a brand new handset can land on the on/off row. That is
-why the ladder keeps its lower tiers.
+Three rows deserve reading twice:
+
+- **The Android rows below `full` are about hardware, not version.** A device
+  with a rotary (ERM) motor reports no amplitude control and no composition
+  primitives at any API level, so a brand new handset can land on the on/off
+  row. That is why the ladder keeps its lower tiers.
+- **Android 7 is always `rhythm`,** whatever motor it has. `VibrationEffect`
+  arrived in API 26, so below that there is no way to ask for an amplitude
+  even on hardware that could produce one. Nothing is being conservative
+  here; the API simply does not exist.
+- **iPhone 7 drops what it cannot do rather than approximating it.** A
+  continuous event has nothing to sustain it on a feedback generator, so a
+  rumble or a curve is not played at a reduced fidelity — it is not played.
+  Taps come through with intensity. `supportsContinuous` is `false` there, so
+  you can ask before designing around one.
 
 ### Designing for the `rhythm` tier
 
@@ -65,6 +77,11 @@ around:
   and every tap comes out the same width. `doubleClick` and `tripleClick`
   still read, because their *spacing* survives; `lightTap` and `heavyTap` feel
   identical.
+- **Below 0.15 intensity, nothing plays at all.** An on/off actuator has one
+  speed, so a quiet event can only be rendered at full strength or not at all,
+  and rendering a 0.1 tap at full strength would be a lie about what you
+  asked for. A pattern built entirely from soft events is silent on this tier
+  — another reason to carry meaning in timing.
 - **System feedback is declined here**, not forwarded. Android's
   `HapticFeedbackConstants` and predefined effects are short by design, which
   is exactly what this hardware cannot do — and `performHapticFeedback`
@@ -79,9 +96,21 @@ Notes for Android:
 - Tap-only patterns prefer composition primitives even on envelope-capable
   hardware — primitives are tuned by the device vendor and feel crisper than
   anything synthesised. Patterns containing a rumble use envelopes.
-- Overlapping events (`overlay`, `|`) are flattened onto a single timeline,
-  since Android exposes one vibrator channel. Where events overlap, the
-  loudest wins and carries its sharpness.
+- Overlapping events (`overlay`, `|`) have to be flattened, since Android
+  exposes one vibrator channel — but **how** they flatten depends on the tier,
+  and the two answers are genuinely different:
+  - On the **envelope and waveform** tiers the timeline is sampled, so where
+    events overlap the loudest wins and carries its sharpness. This is the
+    behaviour the rest of these docs describes.
+  - On the **composition** tier there is no timeline to sample: the renderer
+    emits vendor primitives with a delay between them, and a delay cannot be
+    negative. Two taps that overlap are played **back to back** instead,
+    which stretches the pattern by the width of the first tap.
+
+  The practical rule: overlay rumbles freely, and treat overlapping *taps* as
+  a sequence, because on some devices that is exactly what they become. Where
+  you need two taps at one instant, one tap with a higher intensity says the
+  same thing on every tier.
 - The plugin declares `android.permission.VIBRATE` itself. It is a normal
   permission: granted at install, never prompts.
 - Haptics can still be suppressed by the user's system vibration settings or
@@ -104,7 +133,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  flutter_haptics: ^1.0.0
+  flutter_haptics: ^2.0.0
 ```
 
 ## Quick Start
@@ -250,6 +279,67 @@ A closing tap counts as `HapticEvent.transientWidth` (25 ms) wide, so chained
 and repeated patterns never stack two events on the same instant — use
 `overlay` when you want simultaneity.
 
+### Repeated Haptics
+
+`play` serialises a pattern, ships it across the channel and has the platform
+build it again on every call. For anything fired repeatedly — a picker tick,
+a step counter, a drag, a game loop — register it once and play the handle:
+
+```dart
+class _PickerState extends State<Picker> {
+  final _tick = FlutterHaptics.register(HapticPatterns.selection);
+
+  void _onItemChanged() => _tick.play();
+
+  @override
+  void dispose() {
+    _tick.dispose();
+    super.dispose();
+  }
+}
+```
+
+`register` returns synchronously, so a handle can be a field initialiser or
+built in `initState`. Registration runs in the background; a `play` that
+arrives before it finishes waits for it rather than racing it.
+
+Use a plain `final`, not `late final` — a lazy field would not register until
+the first play, which is exactly the round trip the handle exists to avoid.
+If you need to *display* what the handle resolved to, `await handle.ready`;
+nothing else has to.
+
+**A handle will not replay faster than `minInterval`.** Taps arriving closer
+together than the actuator can separate do not read as separate taps — they
+smear into a buzz — and every one still crosses the platform channel. A paced
+handle drops the ones that would not have been felt as distinct, reporting
+`HapticRoute.none` for them.
+
+The default comes from what the device says it can do, never from which
+platform it is:
+
+| `support.fidelity` | Default |
+|---|---|
+| `full` | 25 ms — one transient width |
+| `intensity` | 35 ms |
+| `rhythm` | 60 ms — taps are widened to 50 ms here |
+| not yet known | 40 ms, conservatively, until it resolves |
+
+Pacing reads the time through `package:clock`, which `testWidgets` advances
+when a test pumps. A widget test that pumps between two plays therefore sees
+the gap it asked for, not the handful of real milliseconds the pumps took.
+
+**Handles hold patterns only.** `register` does not yet take an intent or a
+system constant, so a picker driven by `IOSHaptic.selection` has to call
+`perform`/`playSystem` directly and pace itself. That is the next thing on
+the list.
+
+Pass `minInterval: Duration.zero` to opt out and fire every call, or your own
+duration to set the floor yourself.
+
+Always returns a usable handle. Where the platform cannot hold a prepared
+pattern it falls back to `play` and reports `isPrepared == false`, so a caller
+never needs to branch.
+
 ### System Feedback
 
 Patterns are *yours*. System haptics are the *platform's* — the constants the
@@ -310,14 +400,20 @@ words, and say how each platform serves them:
 ```dart
 class AppHaptics {
   static const saved = HapticIntent(
-    ios: IOSHaptic.notificationSuccess,
-    android: AndroidHaptic.confirm,    // needs API 30
-    pattern: HapticPatterns.success,   // recovery below that
+    ios: HapticArm.native(IOSHaptic.notificationSuccess),
+    android: HapticArm.native(AndroidHaptic.confirm),  // needs API 30
+    pattern: HapticPatterns.success,                   // recovery below that
+  );
+
+  static const caution = HapticIntent(
+    ios: HapticArm.native(IOSHaptic.notificationWarning),
+    android: HapticArm.pattern(),      // Android names no warning
+    pattern: HapticPatterns.warning,
   );
 
   static const toggledOn = HapticIntent(
-    ios: null,                         // iOS has no toggle feedback
-    android: AndroidHaptic.toggleOn,   // needs API 34
+    ios: HapticArm.silent(),           // iOS has no toggle feedback
+    android: HapticArm.native(AndroidHaptic.toggleOn),  // needs API 34
     pattern: HapticPatterns.mediumTap,
   );
 }
@@ -327,18 +423,35 @@ await FlutterHaptics.perform(AppHaptics.saved);
 
 One file knows about platforms; every call site stays blind.
 
-**The pattern is a recovery, not a substitute.** It covers a native route you
-*asked for* and did not get — the OS is too old for the constant, the actuator
-cannot render it, or the call was declined. It never fills in for a route you
-never asked for: a `null` arm means this platform plays nothing, on purpose.
+Each arm is one of three things, and each is a statement rather than an
+absence:
+
+| Arm | What `perform` does | Route |
+|---|---|---|
+| `HapticArm.native(…)` | asks the platform; recovers with `pattern` if it cannot | `system`, else `pattern` |
+| `HapticArm.pattern()` | plays `pattern`, without asking | `pattern` |
+| `HapticArm.silent()` | plays nothing, and does not consult `pattern` | `none` |
+
+Both arms are required. An intent that does not say what iOS does is an
+intent nobody can read, and writing `HapticArm.silent()` costs one line and
+answers the question for good.
+
+The arms are typed, so `ios:` takes only an `IOSHaptic` and `android:` only
+an `AndroidHaptic`:
 
 ```dart
-ios: null        →  HapticRoute.none on iOS. The pattern is not consulted.
-android: confirm →  system where API ≥ 30, pattern below it
+ios: HapticArm.native(AndroidHaptic.confirm)   // does not compile
 ```
 
-That is what makes the asymmetry readable. `ios: null` is a line of code
-saying "iOS has no such concept", not a failure discovered at runtime.
+**The pattern is a recovery, not a substitute.** After a `native` arm it
+covers a route you *asked for* and did not get — the OS is too old for the
+constant, the actuator cannot render it, or the call was declined. It never
+fills in for a route you never asked for: `silent()` means this platform
+plays nothing, on purpose, and the pattern is not consulted.
+
+A chosen pattern and a recovered one both report `HapticRoute.pattern`.
+Which it was is written in the intent, where it belongs — not discovered
+at runtime.
 
 ### Knowing What Happened
 
@@ -364,9 +477,30 @@ flutter_haptics: playSystem(toggleOn) played nothing
   — toggleOn requires API 34, this device is 31
 ```
 
-Switching haptics off through `enabled`, or performing an intent whose arm for
-this platform is deliberately `null`, are never reported: both are the app
-getting exactly what it asked for.
+**Each distinct message is reported once.** A haptic firing on every frame of
+a drag would otherwise bury the console in one repeated line, and the repeat
+says nothing new — a device that cannot play something does not start being
+able to halfway through a session. The same call failing for a *new* reason
+is news, and is reported again. `throwIt` is the exception and always throws.
+
+To send failures somewhere of your own, set `onFailureReport`. It replaces
+the mode entirely — nothing is printed and nothing is thrown — so a release
+build can record what is not being felt in the field:
+
+```dart
+FlutterHaptics.onFailureReport = (failure) {
+  FirebaseCrashlytics.instance.log('$failure');
+};
+```
+
+A `HapticFailure` carries the thing that failed as well as the sentence:
+`failure.haptic` for a system constant, `failure.pattern` for a pattern.
+Patterns have no names, so two different ones can describe themselves
+identically — reach for `pattern` rather than parsing `request`.
+
+Switching haptics off through `enabled`, and performing an intent whose arm
+for this platform is `HapticArm.silent()`, are never reported: both are the
+app getting exactly what it asked for.
 
 ### Capability Detection
 
@@ -450,9 +584,20 @@ If `android` is omitted, the `ios` pattern is used everywhere.
 | `prepare()` | Warm up the haptic engine for reduced latency (no-op on Android) |
 | `stop()` | Stop any currently playing pattern |
 | `playSystem(SystemHaptic)` | Play one platform's own constant; never falls back |
-| `perform(HapticIntent)` | Native route where declared, the intent's pattern where not |
+| `perform(HapticIntent)` | Do what this platform's `HapticArm` says |
 | `onFailure` | What happens when a haptic could not be delivered |
-| `register(HapticPattern)` | Prepare a pattern natively for cheap replay |
+| `onFailureReport` | Send those failures to your own logger instead |
+| `register(HapticPattern, {minInterval})` | A `HapticHandle` for cheap, paced replay — returns synchronously |
+
+### HapticHandle
+
+| Member | Description |
+|--------|-------------|
+| `play()` | Replay it, unless it falls inside `minInterval` |
+| `minInterval` | The pacing floor in force; settles once the device answers |
+| `ready` | Completes when the registration and `minInterval` have settled |
+| `isPrepared` | Whether the platform is holding a prepared copy right now |
+| `dispose()` | Release it. `play()` does nothing afterwards |
 | `support` | `Future<HapticSupport>` — what this device can reproduce (cached) |
 | `isSupported` | `Future<bool>` — whether anything at all will play |
 | `enabled` | App-wide on/off switch for `play()`; defaults to `true` |
@@ -472,6 +617,14 @@ If `android` is omitted, the `ios` pattern is used everywhere.
 | `TransientEvent` | Sharp, instantaneous tap (intensity, sharpness, delay) |
 | `ContinuousEvent` | Sustained rumble with constant values |
 | `ContinuousEvent.curved` | Sustained rumble with parameter curves |
+
+### HapticArm
+
+| Value | Meaning |
+|-------|---------|
+| `HapticArm.native(haptic)` | Play this platform's constant; recover with the pattern |
+| `HapticArm.pattern()` | Use the intent's pattern here, by choice |
+| `HapticArm.silent()` | Play nothing here, by choice |
 
 ### HapticPatterns Library
 
@@ -512,9 +665,39 @@ testWidgets('submitting confirms', (tester) async {
 });
 ```
 
-`FakeHapticsPlatform` records `played`, `systemHaptics`, `registrations`,
-`replays`, `releases`, `prepareCount` and `stopCount`, and `clear()` resets
-them.
+`FakeHapticsPlatform` records `played`, `systemHaptics`, `intents`,
+`registrations`, `replays`, `releases`, `prepareCount` and `stopCount`, and
+`clear()` resets them.
+
+`intents` is recorded before the arm is resolved — and before
+`FlutterHaptics.enabled` is consulted, since it is what your app asked for
+rather than what the device was asked to do:
+
+```dart
+expect(haptics.intents, [AppHaptics.saved]);          // it asked to confirm
+expect(haptics.lastPlayed, AppHaptics.saved.pattern); // and had to recover
+```
+
+`clear()` empties the records without releasing anything, so a handle
+arranged before the call still replays after it. To simulate the platform
+losing its registrations — which Android does when the plugin detaches from
+its engine — call `debugLoseRegistrations()`.
+
+**Pacing and `pump()`.** A handle measures its interval with
+`package:clock`, which `testWidgets` advances. A bare `await tester.pump()`
+advances it by *zero*, so this drops the second haptic every time:
+
+```dart
+await tester.tap(nextItem);
+await tester.pump();          // 0ms later
+await tester.tap(nextItem);
+await tester.pump();          // still 0ms later — paced out
+```
+
+Pump a realistic gap — `tester.pump(const Duration(milliseconds: 100))` —
+or register with `minInterval: Duration.zero` in tests that only care that
+each tap asked for a haptic. `pumpAndSettle` advances 100 ms per frame and
+is fine as it is.
 
 Its constructor stands in for a device less capable than the one running the
 test, which is the case hardest to reach otherwise:
@@ -536,7 +719,24 @@ FlutterHapticsPlatform.instance = FakeHapticsPlatform(
     supportsContinuous: true,
   ),
 );
+
+// A device with no vibrator at all — every play fails.
+FlutterHapticsPlatform.instance =
+    FakeHapticsPlatform(support: HapticSupport.unsupported);
 ```
+
+The fake applies that `support` the way the real platforms do, to patterns
+as well as constants:
+
+- A `rhythm` actuator declines a constant asked for through `perform` —
+  which carries a pattern to recover with — while `playSystem`, which does
+  not second-guess the device, still plays it.
+- A device reporting `HapticFidelity.none` plays nothing at all.
+- A device that cannot sustain a rumble refuses a pattern made only of
+  continuous events, exactly as iPhone 7 does.
+
+So a failing haptic is testable without pretending the whole platform is
+broken — and `played` still records what was asked for either way.
 
 `FlutterHaptics` is a thin facade over `FlutterHapticsPlatform.instance`: the
 facade holds the policy (the app-wide switch, empty patterns, semantic

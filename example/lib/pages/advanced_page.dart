@@ -13,9 +13,17 @@ class AdvancedPage extends StatefulWidget {
 }
 
 class _AdvancedPageState extends State<AdvancedPage> {
-  HapticHandle? _tick;
+  /// Built synchronously — registration and the pacing interval both resolve
+  /// in the background, so there is nothing to await here.
+  ///
+  /// A plain `final`, not `late final`: a lazy field would not register until
+  /// the first play, which is the round trip the handle exists to avoid.
+  final HapticHandle _tick =
+      FlutterHaptics.register(HapticPatterns.selection);
+
   int _step = 0;
-  int _ticks = 0;
+  int _drags = 0;
+  int _played = 0;
 
   HapticPattern? _boing;
   String? _boingError;
@@ -23,20 +31,25 @@ class _AdvancedPageState extends State<AdvancedPage> {
   @override
   void initState() {
     super.initState();
-    _prepare();
-  }
-
-  Future<void> _prepare() async {
-    // Registered once, replayed on every step of the slider below.
-    final tick = await FlutterHaptics.register(HapticPatterns.selection);
-    if (mounted) setState(() => _tick = tick);
+    // The handle starts out unprepared and conservatively paced; redraw once
+    // the platform has answered so the readout below is the truth.
+    _tick.ready.then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
     // Handles hold native resources.
-    _tick?.dispose();
+    _tick.dispose();
     super.dispose();
+  }
+
+  /// Plays the handle and records whether the pacing let it through, which
+  /// is the only way to see a floor that works by dropping things.
+  Future<void> _replay() async {
+    final route = await _tick.play();
+    if (route != HapticRoute.none && mounted) setState(() => _played++);
   }
 
   Future<void> _loadBoing() async {
@@ -52,7 +65,6 @@ class _AdvancedPageState extends State<AdvancedPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final tick = _tick;
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -61,7 +73,9 @@ class _AdvancedPageState extends State<AdvancedPage> {
           title: 'Registered handle',
           blurb: 'FlutterHaptics.register hands the pattern to the platform '
               'once. Dragging fires a tick per step without re-serialising or '
-              'rebuilding it — this is the shape of a picker or a scrub bar.',
+              'rebuilding it — this is the shape of a picker or a scrub bar. '
+              'Drag fast and the counts diverge: a handle will not replay '
+              'faster than the actuator can separate.',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -71,28 +85,28 @@ class _AdvancedPageState extends State<AdvancedPage> {
                 max: 20,
                 divisions: 20,
                 label: '$_step',
-                onChanged: tick == null
-                    ? null
-                    : (value) {
-                        final next = value.round();
-                        if (next == _step) return;
-                        setState(() {
-                          _step = next;
-                          _ticks++;
-                        });
-                        tick.play();
-                      },
+                onChanged: (value) {
+                  final next = value.round();
+                  if (next == _step) return;
+                  setState(() {
+                    _step = next;
+                    _drags++;
+                  });
+                  // Paced: drags faster than the actuator can separate are
+                  // dropped rather than smeared into a buzz.
+                  _replay();
+                },
               ),
               const SizedBox(height: 4),
               Text(
-                tick == null
-                    ? 'registering…'
-                    : 'prepared: ${tick.isPrepared} · ticks played: $_ticks',
+                'prepared: ${_tick.isPrepared} · '
+                    'min interval: ${_tick.minInterval.inMilliseconds}ms · '
+                    'played $_played of $_drags drags',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-              if (tick != null && !tick.isPrepared)
+              if (!_tick.isPrepared)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(

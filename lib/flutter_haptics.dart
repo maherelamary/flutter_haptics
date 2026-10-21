@@ -9,8 +9,8 @@
 /// // One platform's own constant. The type says which platform.
 /// await FlutterHaptics.playSystem(AndroidHaptic.toggleOn);
 ///
-/// // A meaning: the native route where you declared one, your pattern where
-/// // it could not be delivered.
+/// // A meaning: whatever this platform's arm says, with your pattern to
+/// // recover with.
 /// await FlutterHaptics.perform(AppHaptics.saved);
 /// ```
 ///
@@ -34,11 +34,13 @@
 /// - [HapticPatternBuilder] — a fluent way to build one
 /// - [IOSHaptic], [AndroidHaptic], [SystemHaptic] — each platform's own
 ///   constants, carrying the OS version they need
-/// - [HapticIntent] — a native route per platform with a pattern to recover
+/// - [HapticIntent], [HapticArm] — what each platform does for one meaning
+///   in your app: its own constant, your pattern, or nothing
 /// - [HapticRoute] — what a call did: `system`, `pattern` or `none`
 /// - [HapticSupport] — what this device can actually reproduce
 /// - [HapticFailureMode] — log, throw or ignore a haptic that could not play
-/// - [HapticHandle] — a pattern the platform holds ready for cheap replay
+/// - [HapticHandle] — a pattern the platform holds ready, replayed cheaply
+///   and no faster than the actuator can separate
 /// - [Ahap] — read and write Apple's `.ahap` pattern files
 /// - [FlutterHapticsPlatform] — the seam to swap in tests; see
 ///   `package:flutter_haptics/testing.dart`

@@ -22,7 +22,7 @@ flutter run
 | **iOS** | All 9 UIKit feedback kinds. Silent on Android by design |
 | **Intents** | Cross-platform meanings, defined by this app in `lib/app_haptics.dart` — the file to copy |
 | **Patterns** | The built-in library, parameter curves, composition and the fluent builder |
-| **Advanced** | A registered handle driving a slider, and loading an `.ahap` file |
+| **Advanced** | A registered handle driving a slider, showing how many drags the pacing let through, and loading an `.ahap` file |
 
 ## Worth trying on a budget Android
 

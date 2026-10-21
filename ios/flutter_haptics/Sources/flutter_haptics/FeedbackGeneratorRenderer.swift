@@ -54,9 +54,11 @@ final class FeedbackGeneratorRenderer {
         return id
     }
 
-    func playRegistered(_ id: Int) {
-        guard let spec = registered[id] else { return }
+    @discardableResult
+    func playRegistered(_ id: Int) -> Bool {
+        guard let spec = registered[id] else { return false }
         play(spec)
+        return true
     }
 
     func unregister(_ id: Int) {

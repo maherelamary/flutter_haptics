@@ -132,19 +132,24 @@ abstract final class HapticPatterns {
   ]);
 
   /// Buzz - short vibration.
-  static final buzz = HapticPattern([
-    ContinuousEvent(
-      intensity: 0.6,
-      sharpness: 0.5,
+  ///
+  /// Spelled with [ContinuousEvent.curved] so the pattern can be `const`:
+  /// the unnamed constructor wraps its arguments in [ConstantParam] from an
+  /// initializer, which is not a constant expression. The two spellings
+  /// produce equal patterns.
+  static const buzz = HapticPattern([
+    ContinuousEvent.curved(
+      intensity: ConstantParam(0.6),
+      sharpness: ConstantParam(0.5),
       duration: Duration(milliseconds: 100),
     ),
   ]);
 
   /// Long buzz - extended vibration.
-  static final longBuzz = HapticPattern([
-    ContinuousEvent(
-      intensity: 0.6,
-      sharpness: 0.5,
+  static const longBuzz = HapticPattern([
+    ContinuousEvent.curved(
+      intensity: ConstantParam(0.6),
+      sharpness: ConstantParam(0.5),
       duration: Duration(milliseconds: 300),
     ),
   ]);

@@ -42,10 +42,10 @@ class IntentsPage extends StatelessWidget {
         ),
         Section(
           title: 'Reading the result',
-          blurb: 'system means the OS played its own feedback. pattern means '
-              'the route was asked for and could not be delivered, so the '
-              'intent recovered. none means this intent asks for nothing on '
-              'this platform — a deliberate silence, not a failure.',
+          blurb: 'system means the OS played its own feedback. pattern has '
+              'two causes the caption tells apart: the arm chose the pattern, '
+              'or it named a constant this device could not deliver. none '
+              'means the arm is silent here — deliberate, not a failure.',
           child: const SizedBox.shrink(),
         ),
         Section(
@@ -68,26 +68,33 @@ class IntentsPage extends StatelessWidget {
     );
   }
 
-  static String _describe(HapticIntent intent) {
-    final ios = intent.ios?.name ?? '—';
-    final android = intent.android?.name ?? '—';
-    return 'iOS $ios · Android $android';
-  }
+  static String _describe(HapticIntent intent) =>
+      'iOS ${_arm(intent.ios)} · Android ${_arm(intent.android)}';
+
+  static String _arm(HapticArm<SystemHaptic> arm) => switch (arm) {
+        NativeArm(haptic: final haptic) => haptic.name,
+        PatternArm() => 'pattern',
+        SilentArm() => 'silent',
+      };
 
   /// What happened, which is not always what the declaration suggests. On an
   /// actuator that accepts constants without rendering them, perform skips
   /// the native route entirely — so the arm named above was never attempted.
   static String _explain(HapticIntent intent, HapticRoute route) {
-    final arm = intent.routeFor(defaultTargetPlatform)?.name;
+    final arm = intent.armFor(defaultTargetPlatform);
 
-    return switch (route) {
-      HapticRoute.system => 'played $arm',
-      HapticRoute.pattern => arm == null
-          ? 'pattern'
-          : '$arm not delivered → pattern',
-      HapticRoute.none => arm == null
-          ? 'nothing declared for ${defaultTargetPlatform.name}'
-          : 'nothing played',
+    return switch ((route, arm)) {
+      // The arm named a constant and the device delivered it.
+      (HapticRoute.system, NativeArm(haptic: final h)) => 'played ${h.name}',
+      // The arm chose the pattern — nothing was attempted, nothing failed.
+      (HapticRoute.pattern, PatternArm()) => 'pattern, by choice',
+      // The arm named a constant the device could not deliver.
+      (HapticRoute.pattern, NativeArm(haptic: final h)) =>
+        '${h.name} not delivered → pattern',
+      (HapticRoute.none, SilentArm()) =>
+        'silent on ${defaultTargetPlatform.name}, by choice',
+      (HapticRoute.none, _) => 'nothing played',
+      _ => route.name,
     };
   }
 }

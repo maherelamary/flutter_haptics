@@ -80,10 +80,10 @@ void main() {
   });
 
   testWidgets('an intent takes a route and never nothing', (tester) async {
-    // Both arms set, so whatever this device is, one of them resolves.
+    // Native on both, so whatever this device is, one of them resolves.
     const intent = HapticIntent(
-      ios: IOSHaptic.notificationSuccess,
-      android: AndroidHaptic.confirm,
+      ios: HapticArm.native(IOSHaptic.notificationSuccess),
+      android: HapticArm.native(AndroidHaptic.confirm),
       pattern: HapticPatterns.success,
     );
 
@@ -91,20 +91,34 @@ void main() {
     expect(route, isIn([HapticRoute.system, HapticRoute.pattern]));
   });
 
-  testWidgets('an intent with no arm here is a deliberate silence',
+  testWidgets('a silent arm plays nothing and never the pattern',
       (tester) async {
-    const nothingHere = HapticIntent(
-      ios: null,
-      android: null,
+    const silentEverywhere = HapticIntent(
+      ios: HapticArm.silent(),
+      android: HapticArm.silent(),
       pattern: HapticPatterns.success,
     );
 
-    // The pattern is a recovery, not a substitute — it is not consulted.
-    expect(await FlutterHaptics.perform(nothingHere), HapticRoute.none);
+    expect(await FlutterHaptics.perform(silentEverywhere), HapticRoute.none);
+  });
+
+  testWidgets('a pattern arm plays the pattern on any device', (tester) async {
+    const patternEverywhere = HapticIntent(
+      ios: HapticArm.pattern(),
+      android: HapticArm.pattern(),
+      pattern: HapticPatterns.success,
+    );
+
+    // Chosen, not recovered — nothing native was attempted.
+    expect(await FlutterHaptics.perform(patternEverywhere), HapticRoute.pattern);
   });
 
   testWidgets('a registered handle plays and disposes', (tester) async {
-    final handle = await FlutterHaptics.register(HapticPatterns.selection);
+    // Synchronous now; registration resolves in the background.
+    final handle = FlutterHaptics.register(
+      HapticPatterns.selection,
+      minInterval: Duration.zero, // no pacing, so both plays land
+    );
 
     await handle.play();
     await handle.play();

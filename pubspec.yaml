@@ -1,6 +1,6 @@
 name: flutter_haptics
 description: Haptic feedback for Flutter — composable patterns with parameter curves, plus iOS and Android's own haptic constants and the intents that pair them.
-version: 1.0.0
+version: 2.0.0
 homepage: https://github.com/maherelamary/flutter_haptics
 repository: https://github.com/maherelamary/flutter_haptics
 issue_tracker: https://github.com/maherelamary/flutter_haptics/issues
@@ -18,6 +18,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Pacing reads the time through `clock` so that `testWidgets` can advance
+  # it. DateTime.now() is not faked by a pump, which would make a handle drop
+  # haptics in its users' widget tests.
+  clock: ^1.1.1
 
 dev_dependencies:
   flutter_test:
