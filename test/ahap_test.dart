@@ -47,9 +47,11 @@ void main() {
       expect(event.sharpness, const ConstantParam(0.4));
     });
 
-    test('control point times are absolute, not relative to the curve', () {
-      // The curve starts at 2.0s and its points run 2.0 -> 3.0 in absolute
-      // pattern time. Normalised onto a 1s event that is 0.0 -> 1.0.
+    test('control point times are relative to the curve, as Apple writes them',
+        () {
+      // Apple's own authored AHAP does exactly this: a curve at Time 1.207
+      // carrying control points that start at 0.0. Read as absolute, these
+      // points land before the event and collapse to a single value.
       final pattern = Ahap.decode('''
       {
         "Pattern": [
@@ -64,9 +66,9 @@ void main() {
               "ParameterID": "HapticIntensityControl",
               "Time": 2.0,
               "ParameterCurveControlPoints": [
-                { "Time": 2.0, "ParameterValue": 0.2 },
-                { "Time": 2.5, "ParameterValue": 0.9 },
-                { "Time": 3.0, "ParameterValue": 0.0 }
+                { "Time": 0.0, "ParameterValue": 0.2 },
+                { "Time": 0.5, "ParameterValue": 0.9 },
+                { "Time": 1.0, "ParameterValue": 0.0 }
               ] } }
         ]
       }''');
@@ -76,6 +78,61 @@ void main() {
 
       expect(points.map((p) => p['time']), [0.0, 0.5, 1.0]);
       expect(points.map((p) => p['value']), [0.2, 0.9, 0.0]);
+    });
+
+    test('a curve claimed by an already-running event keeps its offset', () {
+      // The curve starts half a second into a two-second rumble, so its
+      // points land in the second half of the event rather than across it.
+      final pattern = Ahap.decode('''
+      {
+        "Pattern": [
+          { "Event": {
+              "Time": 0.0,
+              "EventType": "HapticContinuous",
+              "EventDuration": 2.0,
+              "EventParameters": [
+                { "ParameterID": "HapticIntensity", "ParameterValue": 1.0 }
+              ] } },
+          { "ParameterCurve": {
+              "ParameterID": "HapticIntensityControl",
+              "Time": 1.0,
+              "ParameterCurveControlPoints": [
+                { "Time": 0.0, "ParameterValue": 1.0 },
+                { "Time": 1.0, "ParameterValue": 0.0 }
+              ] } }
+        ]
+      }''');
+
+      final event = pattern.events.single as ContinuousEvent;
+      expect(event.intensity.toControlPoints().map((p) => p['time']),
+          [0.5, 1.0]);
+    });
+
+    test('a curve with no Time starts at zero, not at its first point', () {
+      // A missing key takes its default, and Time defaults to 0. Falling
+      // back to the first point's time is the absolute reading.
+      final pattern = Ahap.decode('''
+      {
+        "Pattern": [
+          { "Event": {
+              "Time": 0.0,
+              "EventType": "HapticContinuous",
+              "EventDuration": 2.0,
+              "EventParameters": [
+                { "ParameterID": "HapticIntensity", "ParameterValue": 1.0 }
+              ] } },
+          { "ParameterCurve": {
+              "ParameterID": "HapticIntensityControl",
+              "ParameterCurveControlPoints": [
+                { "Time": 1.0, "ParameterValue": 1.0 },
+                { "Time": 2.0, "ParameterValue": 0.0 }
+              ] } }
+        ]
+      }''');
+
+      final event = pattern.events.single as ContinuousEvent;
+      expect(event.intensity.toControlPoints().map((p) => p['time']),
+          [0.5, 1.0]);
     });
 
     test('numbers written as strings are read, not skipped', () {
@@ -153,7 +210,7 @@ void main() {
       expect(pattern.events, isEmpty);
     });
 
-    test('a curve whose Time is unreadable starts at its first point', () {
+    test('a curve whose Time is unreadable starts at zero', () {
       final pattern = Ahap.decode('''
       {
         "Pattern": [
@@ -225,6 +282,34 @@ void main() {
 
       final event = pattern.events.single as ContinuousEvent;
       expect(event.sharpness.toControlPoints().map((p) => p['value']), [0.0, 1.0]);
+    });
+
+    test('a neutral curve is a reset, and is not claimed by an event', () {
+      // How a writer with only pattern-wide parameters undoes an earlier
+      // curve. Read as a shape, it would mask the event's own curve.
+      final pattern = Ahap.decode('''
+      {
+        "Pattern": [
+          { "Event": {
+              "Time": 1.0,
+              "EventType": "HapticContinuous",
+              "EventDuration": 1.0,
+              "EventParameters": [
+                { "ParameterID": "HapticIntensity", "ParameterValue": 0.4 }
+              ] } },
+          { "ParameterCurve": {
+              "ParameterID": "HapticIntensityControl",
+              "Time": 1.0,
+              "ParameterCurveControlPoints": [
+                { "Time": 0.0, "ParameterValue": 1.0 },
+                { "Time": 1.0, "ParameterValue": 1.0 }
+              ] } }
+        ]
+      }''');
+
+      final event = pattern.events.single as ContinuousEvent;
+      expect(event.intensity, const ConstantParam(0.4),
+          reason: 'the event keeps its own intensity');
     });
 
     test('audio events and standalone parameters are dropped', () {
@@ -312,7 +397,7 @@ void main() {
       );
     });
 
-    test('curve control point times are absolute', () {
+    test('curve control point times are relative to the curve', () {
       final json = Ahap.encodeMap(
         HapticPattern([
           ContinuousEvent.curved(
@@ -327,12 +412,15 @@ void main() {
           .cast<Map>()
           .firstWhere((e) => e.containsKey('ParameterCurve'))['ParameterCurve'] as Map;
 
+      // The curve sits at 2.0s; its points run 0.0 -> 1.0 from there, not
+      // 2.0 -> 3.0. Writing them absolute double-offsets the curve in any
+      // Core Haptics player.
       expect(curve['Time'], 2.0);
       expect(
         (curve['ParameterCurveControlPoints'] as List)
             .cast<Map>()
             .map((p) => p['Time']),
-        [2.0, 3.0],
+        [0.0, 1.0],
       );
     });
 
@@ -353,6 +441,96 @@ void main() {
         ),
         throwsStateError,
       );
+    });
+
+    test('a curved rumble is followed by a reset to neutral', () {
+      final json = Ahap.encodeMap(
+        HapticPattern([
+          ContinuousEvent.curved(
+            intensity: HapticParam.fadeOut,
+            sharpness: HapticParam.rampUp,
+            duration: const Duration(milliseconds: 400),
+          ),
+          const TransientEvent(
+            intensity: 1,
+            sharpness: 1,
+            delay: Duration(milliseconds: 600),
+          ),
+        ]),
+      );
+
+      final resets = (json['Pattern'] as List)
+          .cast<Map>()
+          .where((e) => e.containsKey('Parameter'))
+          .map((e) => e['Parameter'] as Map)
+          .toList();
+
+      // Without these the tap at 600ms would play at the curve's last
+      // value, which fadeOut leaves at zero: silent.
+      expect(resets, hasLength(2));
+      expect(
+        resets.map((r) => (r['ParameterID'], r['ParameterValue'], r['Time'])),
+        containsAll([
+          ('HapticIntensityControl', 1.0, 0.4),
+          ('HapticSharpnessControl', 0.0, 0.4),
+        ]),
+      );
+    });
+
+    test('no reset where another curve starts at that instant', () {
+      // Back-to-back rumbles: the second curve takes over exactly where the
+      // first ends, and two parameter writes at one moment have no defined
+      // winner.
+      final json = Ahap.encodeMap(
+        HapticPattern([
+          ContinuousEvent.curved(
+            intensity: HapticParam.fadeOut,
+            duration: const Duration(milliseconds: 400),
+          ),
+          ContinuousEvent.curved(
+            intensity: HapticParam.fadeIn,
+            duration: const Duration(milliseconds: 400),
+            delay: const Duration(milliseconds: 400),
+          ),
+        ]),
+      );
+
+      final resets = (json['Pattern'] as List)
+          .cast<Map>()
+          .where((e) => e.containsKey('Parameter'))
+          .map((e) => e['Parameter'] as Map)
+          .toList();
+
+      expect(resets, hasLength(1), reason: 'only the last one needs it');
+      expect(resets.single['Time'], 0.8);
+    });
+
+    test('no reset while another curve is still running', () {
+      // The first rumble ends halfway through the second. A reset there
+      // would cut straight through the second rumble's curve, which is the
+      // leak it was meant to prevent, pointed the other way.
+      final json = Ahap.encodeMap(
+        HapticPattern([
+          ContinuousEvent.curved(
+            intensity: HapticParam.fadeOut,
+            duration: const Duration(milliseconds: 400),
+          ),
+          ContinuousEvent.curved(
+            intensity: HapticParam.fadeIn,
+            duration: const Duration(milliseconds: 400),
+            delay: const Duration(milliseconds: 200),
+          ),
+        ]),
+      );
+
+      final resets = (json['Pattern'] as List)
+          .cast<Map>()
+          .where((e) => e.containsKey('Parameter'))
+          .map((e) => e['Parameter'] as Map)
+          .toList();
+
+      expect(resets, hasLength(1), reason: 'only after the last curve ends');
+      expect(resets.single['Time'], 0.6);
     });
 
     test('produces parseable JSON', () {

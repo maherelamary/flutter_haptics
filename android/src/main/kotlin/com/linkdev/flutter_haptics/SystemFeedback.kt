@@ -121,12 +121,23 @@ internal fun playSystemHaptic(
 internal class NativeAnswer private constructor(
     private val played: Boolean,
     private val reason: String,
+    /**
+     * Set only when a registration the caller asked for is gone, so the Dart
+     * handle can tell that apart from a vibrator that would not play it.
+     */
+    private val registrationLost: Boolean = false,
 ) {
-    fun toMap(): Map<String, Any> = mapOf("played" to played, "reason" to reason)
+    fun toMap(): Map<String, Any> =
+        mapOf(
+            "played" to played,
+            "reason" to reason,
+            "registrationLost" to registrationLost,
+        )
 
     companion object {
         fun played() = NativeAnswer(true, "")
 
-        fun failed(reason: String) = NativeAnswer(false, reason)
+        fun failed(reason: String, registrationLost: Boolean = false) =
+            NativeAnswer(false, reason, registrationLost)
     }
 }

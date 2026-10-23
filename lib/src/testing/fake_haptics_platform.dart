@@ -142,6 +142,11 @@ class FakeHapticsPlatform extends FlutterHapticsPlatform {
   /// engine. The next replay fails and the handle falls back to `play`.
   void debugLoseRegistrations() => _live.clear();
 
+  /// Makes replays fail while *keeping* the registrations, which stands in
+  /// for an engine that will not play right now. A handle should ride this
+  /// out rather than giving up its registration over it.
+  bool refuseReplays = false;
+
   @override
   Future<HapticSupport> querySupport() async => support;
 
@@ -211,9 +216,16 @@ class FakeHapticsPlatform extends FlutterHapticsPlatform {
     replays.add(id);
     // An id this fake is not holding stands in for a lost registration —
     // one never issued, or one already released.
-    return _live.contains(id)
-        ? const NativeResult.played()
-        : const NativeResult.failed('no such registration on this fake');
+    if (!_live.contains(id)) {
+      return const NativeResult.failed(
+        'no such registration on this fake',
+        registrationLost: true,
+      );
+    }
+    if (refuseReplays) {
+      return const NativeResult.failed('this fake will not replay right now');
+    }
+    return const NativeResult.played();
   }
 
   @override

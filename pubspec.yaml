@@ -1,6 +1,6 @@
 name: flutter_haptics
 description: Haptic feedback for Flutter — composable patterns with parameter curves, plus iOS and Android's own haptic constants and the intents that pair them.
-version: 2.0.0
+version: 2.0.1
 homepage: https://github.com/maherelamary/flutter_haptics
 repository: https://github.com/maherelamary/flutter_haptics
 issue_tracker: https://github.com/maherelamary/flutter_haptics/issues
@@ -10,6 +10,21 @@ topics:
   - haptic-feedback
   - vibration
   - core-haptics
+
+# Shown on pub.dev. From Flutter Haptics Tactile, the showcase app built on
+# this package. Kept small (WebP, 1080 px wide) because they ship in the
+# package archive.
+screenshots:
+  - description: 'Flutter Haptics Tactile, a showcase app where every haptic comes with its reasoning.'
+    path: doc/screenshots/home.webp
+  - description: 'Both vocabularies: every iOS and Android constant, playable, with the meanings that use it.'
+    path: doc/screenshots/system.webp
+  - description: 'An intent per meaning: each platform''s own constant, with a pattern to recover with.'
+    path: doc/screenshots/gallery.webp
+  - description: 'Pattern Studio: compose taps and rumbles, then feel them on cheaper hardware tiers.'
+    path: doc/screenshots/studio.webp
+  - description: 'Export a composed pattern as Dart or as an AHAP file.'
+    path: doc/screenshots/export.webp
 
 environment:
   sdk: ^3.9.2

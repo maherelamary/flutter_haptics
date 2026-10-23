@@ -105,11 +105,19 @@ struct NativeAnswer {
     let played: Bool
     let reason: String
 
-    static func played() -> NativeAnswer { NativeAnswer(played: true, reason: "") }
+    /// Set only when a registration the caller asked for is gone, so the
+    /// Dart handle can tell that apart from an engine that would not play.
+    let registrationLost: Bool
 
-    static func failed(_ reason: String) -> NativeAnswer {
-        NativeAnswer(played: false, reason: reason)
+    static func played() -> NativeAnswer {
+        NativeAnswer(played: true, reason: "", registrationLost: false)
     }
 
-    var asDictionary: [String: Any] { ["played": played, "reason": reason] }
+    static func failed(_ reason: String, registrationLost: Bool = false) -> NativeAnswer {
+        NativeAnswer(played: false, reason: reason, registrationLost: registrationLost)
+    }
+
+    var asDictionary: [String: Any] {
+        ["played": played, "reason": reason, "registrationLost": registrationLost]
+    }
 }

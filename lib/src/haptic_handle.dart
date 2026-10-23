@@ -179,11 +179,16 @@ final class HapticHandle {
     final result = await FlutterHapticsPlatform.instance.playRegistered(id);
     if (result.played) return HapticRoute.pattern;
 
-    // The registration is gone — Android clears them when the plugin detaches
-    // from its engine. Forget it, so later plays do not pay a round trip to
-    // rediscover the same thing and `isPrepared` stops claiming otherwise.
-    _id = null;
-    _registration = null;
+    // Forgotten only where the platform says the registration is gone —
+    // Android clears them when the plugin detaches from its engine — so
+    // later plays do not pay a round trip to rediscover the same thing and
+    // `isPrepared` stops claiming otherwise. An engine that merely would not
+    // play this time keeps its registration: losing it over one bad moment
+    // would cost the handle its whole reason to exist.
+    if (result.registrationLost) {
+      _id = null;
+      _registration = null;
+    }
 
     // Sending the pattern the long way still gets it played.
     if (_disposed) return HapticRoute.none;

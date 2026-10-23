@@ -15,9 +15,11 @@ import 'system_haptic.dart';
 class NativeResult {
   const NativeResult.played()
       : played = true,
-        reason = '';
+        reason = '',
+        registrationLost = false;
 
-  const NativeResult.failed(this.reason) : played = false;
+  const NativeResult.failed(this.reason, {this.registrationLost = false})
+      : played = false;
 
   /// Whether a haptic actually reached the actuator.
   final bool played;
@@ -25,6 +27,15 @@ class NativeResult {
   /// Why it did not, in the platform's own terms — `requires API 34, device
   /// is 31`, `no vibrator on this device`. Empty when [played].
   final String reason;
+
+  /// Whether the platform no longer holds the registration that was asked
+  /// for, as opposed to holding it and failing to play it.
+  ///
+  /// Only ever set by [playRegistered]. The difference matters to a
+  /// [HapticHandle]: a registration that is gone should be forgotten, while
+  /// an engine that would not play this time should be tried again rather
+  /// than costing the handle its registration for the rest of the session.
+  final bool registrationLost;
 }
 
 /// The seam between [FlutterHaptics] and the device.
@@ -154,6 +165,7 @@ class MethodChannelHaptics extends FlutterHapticsPlatform {
       if (raw['played'] == true) return const NativeResult.played();
       return NativeResult.failed(
         (raw['reason'] as String?) ?? 'the platform did not say why',
+        registrationLost: raw['registrationLost'] == true,
       );
     } on MissingPluginException {
       return const NativeResult.failed('no haptics implementation on this platform');

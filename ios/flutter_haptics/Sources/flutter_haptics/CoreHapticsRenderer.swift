@@ -24,7 +24,17 @@ final class CoreHapticsRenderer {
     /// survives an engine reset; a player belongs to one engine and does not.
     /// Holding only the durable half is what makes a registration outlive a
     /// reset without any bookkeeping.
-    private var registeredPatterns: [Int: CHHapticPattern] = [:]
+    private var registeredPatterns: [Int: [CHHapticPattern]] = [:]
+
+    /// How far ahead a multi-player play is scheduled.
+    ///
+    /// The players of one pattern share a start time so they stay in step,
+    /// and that time has to be far enough ahead that the last one is
+    /// scheduled before the first is due. Twenty milliseconds is comfortably
+    /// more than it takes to build a handful of players and under what a
+    /// finger reads as delay. A single player skips the lead entirely and
+    /// starts immediately, so the common case pays nothing for this.
+    private static let scheduleLead: TimeInterval = 0.02
     private var nextRegistrationId = 1
 
     static var isSupported: Bool {
@@ -36,56 +46,99 @@ final class CoreHapticsRenderer {
         _ = try? startedEngine()
     }
 
-    func play(_ spec: HapticSpec) {
-        guard !spec.isEmpty, let pattern = try? buildPattern(spec) else { return }
-        start(pattern)
+    @discardableResult
+    func play(_ spec: HapticSpec) -> Bool {
+        guard !spec.isEmpty, let patterns = try? buildPatterns(spec) else { return false }
+        return start(patterns)
     }
 
-    /// Plays [pattern] on a player of its own.
+    /// Plays one pattern's players, all from the same instant.
     ///
     /// A fresh player every time, deliberately. Core Haptics does not define
     /// what `start` does to a player that is already playing, and reusing one
     /// for rapid replays — a picker tick, a drag — produced exactly the
     /// undefined behaviour you would expect: some taps silently dropped.
-    /// Building the player is the cheap half anyway; the pattern is the part
-    /// worth keeping, and registration keeps it.
-    private func start(_ pattern: CHHapticPattern) {
+    /// Building the player is the cheap half anyway; the patterns are the
+    /// part worth keeping, and registration keeps them.
+    @discardableResult
+    private func start(_ patterns: [CHHapticPattern]) -> Bool {
+        guard !patterns.isEmpty else { return false }
+
         do {
             let engine = try startedEngine()
-            let player = try engine.makeAdvancedPlayer(with: pattern)
+            let startAt = patterns.count == 1
+                ? CHHapticTimeImmediate
+                : engine.currentTime + Self.scheduleLead
 
-            let token = UUID()
-            player.completionHandler = { [weak self] _ in
-                DispatchQueue.main.async { self?.activePlayers[token] = nil }
+            // Every player is built before any of them is started. Building
+            // one can fail, and a failure discovered halfway through would
+            // otherwise leave the earlier players already running — half a
+            // pattern, which is the thing this is here to prevent.
+            var built: [(token: UUID, player: CHHapticAdvancedPatternPlayer)] = []
+            for pattern in patterns {
+                let player = try engine.makeAdvancedPlayer(with: pattern)
+                let token = UUID()
+                player.completionHandler = { [weak self] _ in
+                    DispatchQueue.main.async { self?.activePlayers[token] = nil }
+                }
+                built.append((token, player))
             }
-            activePlayers[token] = player
 
-            try player.start(atTime: CHHapticTimeImmediate)
+            var started: [UUID] = []
+            for one in built {
+                // Registered before starting, so `stop` can reach a player
+                // whichever side of its start time the call arrives on.
+                activePlayers[one.token] = one.player
+                started.append(one.token)
+
+                do {
+                    try one.player.start(atTime: startAt)
+                } catch {
+                    // The rumble without its tap, or the tap without its
+                    // rumble, is not what the caller asked for. Take back
+                    // whatever is already running and report the failure.
+                    for token in started {
+                        try? activePlayers[token]?.stop(atTime: CHHapticTimeImmediate)
+                        activePlayers[token] = nil
+                    }
+                    return false
+                }
+            }
+            return true
         } catch {
-            // Silent fail, matching the plugin's contract.
+            // Nothing was started: the only throwing work above the start
+            // loop is building the engine and the players.
+            return false
         }
     }
 
     /// Builds [spec] now and keeps it, returning the id Dart replays it by.
     func register(_ spec: HapticSpec) -> Int? {
-        guard !spec.isEmpty, let pattern = try? buildPattern(spec) else { return nil }
+        guard !spec.isEmpty, let patterns = try? buildPatterns(spec), !patterns.isEmpty
+        else { return nil }
 
         let id = nextRegistrationId
         nextRegistrationId += 1
-        registeredPatterns[id] = pattern
+        registeredPatterns[id] = patterns
         return id
     }
 
     /// Replays a registered pattern. Identical to [play] from here on, so a
     /// handle and a plain play feel the same — only cheaper to get to.
-    /// Returns whether the id was known, so a handle whose registration was
-    /// lost can fall back to sending the pattern.
+    ///
+    /// Returns whether it actually played. False covers both an id this
+    /// renderer no longer holds and one it holds but could not start; the
+    /// plugin asks [hasRegistration] first to tell the caller which, because
+    /// a handle should forget a lost registration and keep one that merely
+    /// had a bad moment.
     @discardableResult
     func playRegistered(_ id: Int) -> Bool {
-        guard let pattern = registeredPatterns[id] else { return false }
-        start(pattern)
-        return true
+        guard let patterns = registeredPatterns[id] else { return false }
+        return start(patterns)
     }
+
+    /// Whether this renderer is still holding a pattern for [id].
+    func hasRegistration(_ id: Int) -> Bool { registeredPatterns[id] != nil }
 
     func unregister(_ id: Int) {
         registeredPatterns[id] = nil
@@ -153,22 +206,55 @@ final class CoreHapticsRenderer {
 
     // MARK: - Pattern building
 
-    private func buildPattern(_ spec: HapticSpec) throws -> CHHapticPattern {
-        var events: [CHHapticEvent] = []
-        var curves: [CHHapticParameterCurve] = []
+    /// Splits a spec into patterns that can be played together without
+    /// interfering with each other.
+    ///
+    /// A parameter curve is **not tied to the event it was written for**.
+    /// `CHHapticParameter.h` is explicit: dynamic parameters "modify all
+    /// haptic or audio events within a pattern" and are "not tied to specific
+    /// events". Intensity control is a multiplier, so one pattern holding
+    /// every event and every curve meant a rumble's fade reached everything
+    /// else in it — a tap during the fade played at a fraction of its
+    /// intensity, a tap after a fade-to-zero played not at all, and two
+    /// curved rumbles fought over one control.
+    ///
+    /// So each curved rumble gets a pattern of its own, holding that event
+    /// and only its own curves, and everything uncurved shares one. Parameter
+    /// state belongs to the player, so a curve can no longer reach past its
+    /// own. The events keep their original times and every player starts from
+    /// the same instant, which is what holds the pieces together.
+    ///
+    /// Android has never had this problem: it samples each event's own curve
+    /// into one waveform, so nothing leaks in the first place.
+    private func buildPatterns(_ spec: HapticSpec) throws -> [CHHapticPattern] {
+        var plain: [CHHapticEvent] = []
+        var curved: [(event: CHHapticEvent, curves: [CHHapticParameterCurve])] = []
 
         for event in spec.events {
             switch event {
             case .transient(let transient):
-                events.append(makeTransient(transient))
+                plain.append(makeTransient(transient))
             case .continuous(let continuous):
                 let (event, eventCurves) = makeContinuous(continuous)
-                events.append(event)
-                curves.append(contentsOf: eventCurves)
+                if eventCurves.isEmpty {
+                    // Nothing to leak, so it can share the common pattern.
+                    plain.append(event)
+                } else {
+                    curved.append((event, eventCurves))
+                }
             }
         }
 
-        return try CHHapticPattern(events: events, parameterCurves: curves)
+        var patterns: [CHHapticPattern] = []
+        if !plain.isEmpty {
+            patterns.append(try CHHapticPattern(events: plain, parameterCurves: []))
+        }
+        for one in curved {
+            patterns.append(
+                try CHHapticPattern(events: [one.event], parameterCurves: one.curves)
+            )
+        }
+        return patterns
     }
 
     private func makeTransient(_ spec: TransientSpec) -> CHHapticEvent {

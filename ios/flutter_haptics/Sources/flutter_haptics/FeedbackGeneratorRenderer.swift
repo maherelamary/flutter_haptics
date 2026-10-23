@@ -55,11 +55,17 @@ final class FeedbackGeneratorRenderer {
     }
 
     @discardableResult
+    /// Returns whether it played. A feedback generator is fire-and-forget —
+    /// `impactOccurred` reports nothing and cannot fail — so a known id is
+    /// always a yes here, unlike the Core Haptics path.
     func playRegistered(_ id: Int) -> Bool {
         guard let spec = registered[id] else { return false }
         play(spec)
         return true
     }
+
+    /// Whether this renderer is still holding a pattern for [id].
+    func hasRegistration(_ id: Int) -> Bool { registered[id] != nil }
 
     func unregister(_ id: Int) {
         registered[id] = nil

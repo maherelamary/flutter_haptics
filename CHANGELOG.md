@@ -1,3 +1,84 @@
+## 2.0.1
+
+Curves behaved differently from everything else, on iOS and in exported
+files alike. Found by building a pattern editor on 2.0.0.
+
+### Fixed
+
+- **On iOS, a rumble's curve no longer reaches the rest of the pattern.** A
+  parameter curve is not tied to the event it was written for:
+  `CHHapticParameter.h` says dynamic parameters "modify all haptic or audio
+  events within a pattern" and are "not tied to specific events". Intensity
+  control is a multiplier, so building one `CHHapticPattern` holding every
+  event and every curve meant a tap during a fade played at a fraction of
+  its strength, a tap after a fade-to-zero played not at all, two curved
+  rumbles fought over one control, and a flat rumble after a sharpness curve
+  inherited the leftover offset. Each curved rumble now gets a player of its
+  own holding only its own curves, with everything uncurved sharing one and
+  every player starting from the same instant; parameter state belongs to
+  the player, so a curve can no longer reach past it. Registered handles
+  keep the split patterns and behave the same. Taps overlapping a curved
+  rumble now play at full strength on iOS, as they always did on Android.
+  A play that can only start some of its players is taken back rather than
+  left half-rendered, and reports the failure.
+- **AHAP control-point times were written and read backwards.** The format
+  measures a control point from its curve's own `Time`, the same as the
+  `CHHapticParameterCurve` API — Apple's own authored files show it plainly,
+  carrying points that start at `0.0` under a curve at `"Time": 1.207`. This
+  package treated them as absolute from the start of the pattern, so any
+  curve at a non-zero time was written double-offset and read collapsed. A
+  curve starting at zero is identical under either reading, which is how the
+  mistake survived; and because encoding and decoding shared it, round trips
+  agreed with each other while both disagreed with Core Haptics. A curve
+  with no `Time` now defaults to zero rather than to its first point, which
+  was the absolute reading of it.
+- **Encoded files no longer leak a rumble's curve onto later events.** A
+  dynamic parameter is not tied to the event it was written for: it
+  modulates everything in the pattern from the moment it arrives, so a curve
+  fading to zero silenced whatever followed and a tap overlapping a rumble
+  played at the curve's current value. Each curved rumble is now followed by
+  a reset putting intensity back to 1.0 and sharpness to 0.0, skipped where
+  another curve for that parameter is still running or starts at that
+  instant. Decoding
+  ignores all-neutral curves, so a reset written this way by another tool is
+  not mistaken for an event's own shape.
+- `playRegistered` reported success whenever the platform recognised the id,
+  even when nothing played. It now reports the failure, and says whether the
+  registration is *gone* or merely would not play: `NativeResult` gained
+  `registrationLost` for that. A handle forgets its registration only on the
+  first, so one bad moment from the engine no longer costs it the
+  registration for the rest of the session. **If you implement
+  `FlutterHapticsPlatform` yourself**, set `registrationLost: true` for ids
+  you no longer hold: it defaults to `false`, so without it a handle never
+  learns its registration is dead and pays a wasted round trip on every
+  play.
+
+### Added
+
+- `FakeHapticsPlatform.refuseReplays` fails replays while keeping the
+  registrations, standing in for an engine that will not play right now.
+  Together with `debugLoseRegistrations()` it covers both halves of the
+  distinction above: a handle should ride out the first and forget on the
+  second.
+
+### Known limits
+
+- **AHAP cannot express a curve that belongs to one event**, because the
+  format has only pattern-wide parameters. Encoding a tap that overlaps a
+  curved rumble therefore writes a file where that tap is modulated by the
+  rumble's curve; the resets above contain the leak after the rumble ends,
+  not during it. `encode` does not refuse such a pattern — no encoder could
+  do better, and refusing would make a legitimate pattern unencodable.
+- **The same loss runs the other way.** Apple-authored files often use one
+  curve to shape a run of taps, and this package can only attach a curve to
+  a continuous event, so those taps decode at a flat strength.
+
+### Docs
+
+- A README section for AHAP files, carrying both limits above, and one for
+  the showcase app.
+- `pubspec.yaml` lists screenshots for pub.dev.
+
 ## 2.0.0
 
 Four breaking changes, two in the API an app calls and two in the platform

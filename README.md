@@ -27,6 +27,25 @@ A powerful, type-safe haptic feedback library for Flutter. Create rich, customiz
   other behaviour
 - **Silent fail** - Gracefully handles unsupported devices without throwing errors
 
+## Showcase
+
+[**Flutter Haptics Tactile**](https://github.com/maherelamary/flutter_haptics_showcase)
+is a complete app built on this package: 26 everyday components, a lab of
+haptic experiments, three end-to-end flows, every platform constant playable
+one by one, and a studio for composing patterns. Each haptic comes with the
+reasoning behind it and the code to copy, and an on-screen overlay shows what
+played, so it reads in screen recordings too.
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/maherelamary/flutter_haptics/main/doc/screenshots/home.webp"><img src="https://raw.githubusercontent.com/maherelamary/flutter_haptics/main/doc/screenshots/home.webp" width="200" alt="Home"></a>
+  <a href="https://raw.githubusercontent.com/maherelamary/flutter_haptics/main/doc/screenshots/system.webp"><img src="https://raw.githubusercontent.com/maherelamary/flutter_haptics/main/doc/screenshots/system.webp" width="200" alt="Every platform constant, playable"></a>
+  <a href="https://raw.githubusercontent.com/maherelamary/flutter_haptics/main/doc/screenshots/gallery.webp"><img src="https://raw.githubusercontent.com/maherelamary/flutter_haptics/main/doc/screenshots/gallery.webp" width="200" alt="An intent and its code"></a>
+  <a href="https://raw.githubusercontent.com/maherelamary/flutter_haptics/main/doc/screenshots/studio.webp"><img src="https://raw.githubusercontent.com/maherelamary/flutter_haptics/main/doc/screenshots/studio.webp" width="200" alt="Pattern Studio"></a>
+</p>
+
+Run it on a real phone; simulators play no haptics. For the smallest working
+integration, see [`example/`](https://github.com/maherelamary/flutter_haptics/tree/main/example).
+
 ## Platform Support
 
 Every device with a vibrator plays something. What plays depends on what the
@@ -120,6 +139,12 @@ Notes for Android:
 
 Notes for iOS:
 
+- A pattern plays through more than one player when it contains curved
+  rumbles. Core Haptics parameter curves are pattern-wide rather than
+  per-event, so each curved rumble is isolated in a player of its own and
+  they are all started from one instant. You never see this, except that a
+  tap overlapping a rumble is felt at the strength you asked for.
+
 - Core Haptics needs an iPhone 8 or later. On iPhone 7 the plugin falls back
   to UIKit feedback generators, which play taps but cannot sustain a rumble,
   so continuous events are dropped there.
@@ -133,7 +158,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  flutter_haptics: ^2.0.0
+  flutter_haptics: ^2.0.1
 ```
 
 ## Quick Start
@@ -273,6 +298,12 @@ final layered = pattern1.overlay(pattern2);
 final sequential = pattern1 + pattern2;  // same as .then()
 final parallel = pattern1 | pattern2;    // same as .overlay()
 ```
+
+Curves belong to the event that carries them. A tap overlapping a curved
+rumble plays at its own intensity on both platforms, and a rumble following
+one starts from its own values rather than wherever the last curve left off.
+The one place that does not survive is a `.ahap` file — see
+[AHAP files](#ahap-files) — because the format has no per-event curves.
 
 `then` and `repeat` place the next event after the previous one has finished.
 A closing tap counts as `HapticEvent.transientWidth` (25 ms) wide, so chained
@@ -573,6 +604,37 @@ await FlutterHaptics.play(explosion); // play() stays platform-agnostic
 ```
 
 If `android` is omitted, the `ios` pattern is used everywhere.
+
+### AHAP files
+
+Apple's pattern format, read and written:
+
+```dart
+final pattern = await Ahap.loadAsset('assets/haptics/boing.ahap');
+await FlutterHaptics.play(pattern);   // plays on Android too
+
+final json = Ahap.encode(HapticPatterns.explosion);   // and back out
+```
+
+`encode` doubles as pattern serialisation, so a pattern authored in a design
+tool and one built in Dart are interchangeable.
+
+**Two things are lost in translation**, both because AHAP has no concept of a
+curve that belongs to one event — its parameter curves apply to the whole
+pattern:
+
+- **Encoding a tap that overlaps a curved rumble** writes a file where that
+  tap is modulated by the rumble's curve. Each curved rumble is followed by a
+  reset putting intensity and sharpness back to neutral, so the leak stops
+  where the rumble ends — but it cannot be stopped *during* it. `encode` does
+  not refuse such a pattern: no encoder could do better, and refusing would
+  make a perfectly playable pattern unencodable.
+- **Decoding a curve that shapes several taps** — common in Apple-authored
+  files — gives those taps a flat strength, since this package can only
+  attach a curve to a continuous event.
+
+Everything else round-trips. Control-point times are relative to their
+curve's own `Time`, as the format and the Core Haptics API both specify.
 
 ## API Reference
 

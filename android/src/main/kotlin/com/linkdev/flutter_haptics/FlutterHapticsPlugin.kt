@@ -183,7 +183,10 @@ class FlutterHapticsPlugin :
         val id = call.idArgument()
             ?: return NativeAnswer.failed("no registration id given")
         val plan = registered[id]
-            ?: return NativeAnswer.failed("no registration $id on this plugin")
+            ?: return NativeAnswer.failed(
+                "no registration $id on this plugin",
+                registrationLost = true,
+            )
         val vibrator = vibrator()
             ?: return NativeAnswer.failed("no vibrator on this device")
 

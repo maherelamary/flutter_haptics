@@ -33,9 +33,11 @@ import 'haptic_pattern.dart';
 /// Both are handled here, and both are easy to get wrong by reading the
 /// Core Haptics API instead of the file format:
 ///
-/// - **Control point times are absolute**, measured from the start of the
-///   pattern — not relative to the curve's own `Time`, which is how the
-///   `CHHapticParameterCurve` *API* expresses them.
+/// - **Control point times are relative to the curve's own `Time`**, the
+///   same as the `CHHapticParameterCurve` API. Apple's own authored files
+///   show it plainly: a curve at `"Time": 1.207` carries control points
+///   starting at `0.0`. A curve that starts at zero reads identically under
+///   either convention, which is how the opposite belief survives so easily.
 /// - **Curves modulate, they do not replace.** `HapticIntensityControl` is a
 ///   multiplier over the event's `HapticIntensity` (neutral 1.0), and
 ///   `HapticSharpnessControl` is an offset added to `HapticSharpness`
@@ -196,10 +198,13 @@ abstract final class Ahap {
 
     final points = <(double, double)>[];
     for (final point in curve.points) {
-      // Control point times are absolute; normalise onto the event's span.
-      // Rounded because the subtract-then-divide leaves float noise that
-      // would otherwise show up as a control point at 0.9999999999999999.
-      final fraction = _round(((point.$1 - start) / duration).clamp(0.0, 1.0));
+      // A control point's time is measured from the curve's own `Time`, so
+      // its place in the pattern is the two added together. Normalised onto
+      // the event's span from there. Rounded because the subtract-then-
+      // divide leaves float noise that would otherwise show up as a control
+      // point at 0.9999999999999999.
+      final at = curve.time + point.$1;
+      final fraction = _round(((at - start) / duration).clamp(0.0, 1.0));
       final value = _round(combine(base, point.$2).clamp(0.0, 1.0));
       points.add((fraction, value));
     }
@@ -239,9 +244,50 @@ abstract final class Ahap {
     HapticPattern pattern, {
     Map<String, Object?>? metadata,
   }) {
+    // Curves are built first so that a reset can be skipped where another
+    // curve for the same parameter begins at the same instant — two of them
+    // at one moment have no defined winner.
+    final curves = <int, Map<String, Map<String, Object?>>>{};
+    // Every curve's span per parameter, so a reset can tell whether that
+    // parameter is still being driven by something else when it lands.
+    final curveSpans = <String, List<({double start, double end})>>{};
+
+    for (var i = 0; i < pattern.events.length; i++) {
+      final event = pattern.events[i];
+      if (event is! ContinuousEvent) continue;
+
+      final start = _toSeconds(event.delay);
+      final built = <String, Map<String, Object?>>{};
+
+      for (final (id, param) in [
+        ('HapticIntensityControl', event.intensity),
+        ('HapticSharpnessControl', event.sharpness),
+      ]) {
+        final curve = _encodeCurve(
+          param,
+          parameterId: id,
+          start: start,
+          duration: _toSeconds(event.duration),
+        );
+        if (curve == null) continue;
+        built[id] = curve;
+        // `start` arrives rounded from _toSeconds; `end` is a sum of two
+        // rounded values, which can bring the noise back, so it rounds
+        // again — as the reset time it is compared against does. Without
+        // that, an end of 0.6000000000000001 swallows the reset at 0.6 that
+        // should have followed it.
+        (curveSpans[id] ??= []).add(
+          (start: start, end: _round(start + _toSeconds(event.duration))),
+        );
+      }
+
+      if (built.isNotEmpty) curves[i] = built;
+    }
+
     final entries = <Map<String, Object?>>[];
 
-    for (final event in pattern.events) {
+    for (var i = 0; i < pattern.events.length; i++) {
+      final event = pattern.events[i];
       switch (event) {
         case TransientEvent():
           entries.add({
@@ -258,19 +304,9 @@ abstract final class Ahap {
         case ContinuousEvent():
           final start = _toSeconds(event.delay);
           final duration = _toSeconds(event.duration);
-
-          final intensity = _encodeCurve(
-            event.intensity,
-            parameterId: 'HapticIntensityControl',
-            start: start,
-            duration: duration,
-          );
-          final sharpness = _encodeCurve(
-            event.sharpness,
-            parameterId: 'HapticSharpnessControl',
-            start: start,
-            duration: duration,
-          );
+          final built = curves[i] ?? const {};
+          final intensity = built['HapticIntensityControl'];
+          final sharpness = built['HapticSharpnessControl'];
 
           entries.add({
             'Event': {
@@ -293,6 +329,39 @@ abstract final class Ahap {
           });
           if (intensity != null) entries.add({'ParameterCurve': intensity});
           if (sharpness != null) entries.add({'ParameterCurve': sharpness});
+
+          // A dynamic parameter is not tied to the event it was written for:
+          // it modulates every event in the pattern from the moment it is
+          // delivered. Without these resets, a curve that fades to zero
+          // silences whatever comes after it, and a tap overlapping a rumble
+          // plays at the curve's current value. Putting each parameter back
+          // to neutral stops it where the rumble ends. It cannot be
+          // stopped *during* the rumble — the format has no per-event
+          // curves — so a tap overlapping one is still modulated by it.
+          for (final (id, neutral) in [
+            if (intensity != null) ('HapticIntensityControl', 1.0),
+            if (sharpness != null) ('HapticSharpnessControl', 0.0),
+          ]) {
+            final at = _round(start + duration);
+
+            // Only written where nothing else is driving this parameter. A
+            // curve that begins exactly here would be fighting the reset for
+            // one instant with no defined winner, and a curve still running
+            // here — an overlapping rumble — would have the reset cut
+            // through the middle of it. The event's own curve ends at `at`,
+            // so the half-open test does not match it.
+            final busy = curveSpans[id]
+                    ?.any((span) => span.start <= at && at < span.end) ??
+                false;
+            if (busy) continue;
+            entries.add({
+              'Parameter': {
+                'ParameterID': id,
+                'ParameterValue': neutral,
+                'Time': at,
+              },
+            });
+          }
       }
     }
 
@@ -328,8 +397,8 @@ abstract final class Ahap {
       'ParameterCurveControlPoints': [
         for (final point in points)
           {
-            // Absolute, from the start of the pattern.
-            'Time': _round(start + point['time']! * duration),
+            // Measured from this curve's own `Time`, which is `start`.
+            'Time': _round(point['time']! * duration),
             'ParameterValue': _round(point['value']!),
           },
       ],
@@ -402,7 +471,8 @@ abstract final class Ahap {
   static bool _near(double a, double b) => (a - b).abs() < 1e-6;
 }
 
-/// One `ParameterCurve` entry, with its control points in absolute seconds.
+/// One `ParameterCurve` entry. Its control point times are measured from
+/// the curve's own [time], the way the format and the API both express them.
 class _Curve {
   _Curve({
     required this.parameterId,
@@ -431,13 +501,27 @@ class _Curve {
     if (points.isEmpty) return null;
     points.sort((a, b) => a.$1.compareTo(b.$1));
 
-    // A curve with no usable `Time` starts where its first point does, which
-    // is where Core Haptics would put it anyway. Read rather than cast: a
-    // file with `"Time": "0.5"` used to throw a TypeError, which callers
-    // catching FormatException never saw.
+    // A curve that is neutral all the way through is a reset, not a shape:
+    // it exists to undo an earlier curve, which is how a writer that has
+    // only pattern-wide parameters stops one event's curve leaking onto the
+    // next. Claiming it for an event would hide that event's own curve.
+    final neutral = switch (id) {
+      'HapticIntensityControl' => 1.0,
+      'HapticSharpnessControl' => 0.0,
+      _ => null,
+    };
+    if (neutral != null && points.every((p) => Ahap._near(p.$2, neutral))) {
+      return null;
+    }
+
+    // A missing key takes the field's default, and `Time` defaults to zero.
+    // Falling back to the first control point's time would have been the
+    // absolute reading of it, and points are relative. Read rather than
+    // cast: a file with `"Time": "0.5"` used to throw a TypeError, which
+    // callers catching FormatException never saw.
     return _Curve(
       parameterId: id,
-      time: Ahap._asDouble(map['Time']) ?? points.first.$1,
+      time: Ahap._asDouble(map['Time']) ?? 0,
       points: points,
     );
   }

@@ -79,6 +79,24 @@ internal class FlutterHapticsPluginTest {
             mapOf(
                 "played" to false,
                 "reason" to "confirm requires API 30, this device is 0",
+                "registrationLost" to false,
+            ),
+        )
+    }
+
+    @Test
+    fun onMethodCall_playRegistered_unknownId_saysTheRegistrationIsLost() {
+        val call = MethodCall("playRegistered", mapOf("id" to 99))
+        val mockResult: MethodChannel.Result = Mockito.mock(MethodChannel.Result::class.java)
+        plugin.onMethodCall(call, mockResult)
+
+        // The flag is what tells a handle to forget the id rather than keep
+        // paying a round trip to rediscover that it is gone.
+        Mockito.verify(mockResult).success(
+            mapOf(
+                "played" to false,
+                "reason" to "no registration 99 on this plugin",
+                "registrationLost" to true,
             ),
         )
     }
@@ -97,7 +115,11 @@ internal class FlutterHapticsPluginTest {
         plugin.onMethodCall(call, mockResult)
 
         Mockito.verify(mockResult).success(
-            mapOf("played" to false, "reason" to "no vibrator on this device"),
+            mapOf(
+                "played" to false,
+                "reason" to "no vibrator on this device",
+                "registrationLost" to false,
+            ),
         )
     }
 

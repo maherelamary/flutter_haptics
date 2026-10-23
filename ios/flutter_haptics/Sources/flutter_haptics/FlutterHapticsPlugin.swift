@@ -63,12 +63,29 @@ public class FlutterHapticsPlugin: NSObject, FlutterPlugin {
                 result(NativeAnswer.failed("no registration id given").asDictionary)
                 return
             }
+            // A registration this plugin no longer holds and one it holds
+            // but could not play are different answers: the first costs the
+            // handle its registration, the second should not.
+            guard coreHaptics?.hasRegistration(id) == true
+                || feedbackGenerators?.hasRegistration(id) == true
+            else {
+                result(
+                    NativeAnswer.failed(
+                        "no registration \(id) on this plugin",
+                        registrationLost: true
+                    ).asDictionary
+                )
+                return
+            }
+
             let played = (coreHaptics?.playRegistered(id) ?? false)
                 || (feedbackGenerators?.playRegistered(id) ?? false)
             result(
                 played
                     ? NativeAnswer.played().asDictionary
-                    : NativeAnswer.failed("no registration \(id) on this plugin").asDictionary
+                    : NativeAnswer.failed(
+                        "the haptic engine would not play that pattern"
+                    ).asDictionary
             )
 
         case "unregister":
@@ -116,8 +133,12 @@ public class FlutterHapticsPlugin: NSObject, FlutterPlugin {
         if spec.isEmpty { return .failed("no events in the pattern") }
 
         if let coreHaptics {
-            coreHaptics.play(spec)
-            return .played()
+            // Reported rather than assumed: a pattern now plays through more
+            // than one player, and a play that could only start some of them
+            // is taken back rather than left half-rendered.
+            return coreHaptics.play(spec)
+                ? .played()
+                : .failed("the haptic engine would not play that pattern")
         }
         if let feedbackGenerators, SystemFeedbackRenderer.isSupported {
             // Taps only on this device; a rumble has nothing to sustain it.

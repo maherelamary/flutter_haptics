@@ -688,6 +688,28 @@ void main() {
       expect(haptics.played, hasLength(2));
     });
 
+    test('a refusal that is not a loss keeps the registration', () async {
+      final handle = FlutterHaptics.register(
+        HapticPatterns.selection,
+        minInterval: Duration.zero,
+      );
+      await handle.ready;
+      expect(await handle.play(), HapticRoute.pattern);
+
+      // The engine will not play, but it still holds the pattern.
+      haptics.refuseReplays = true;
+      expect(await handle.play(), HapticRoute.pattern);
+      expect(haptics.played, [HapticPatterns.selection],
+          reason: 'it fell back to sending the pattern');
+      expect(handle.isPrepared, isTrue,
+          reason: 'one bad moment must not cost it the registration');
+
+      haptics.refuseReplays = false;
+      expect(await handle.play(), HapticRoute.pattern);
+      expect(haptics.replays, hasLength(3));
+      expect(haptics.played, hasLength(1), reason: 'back to replaying');
+    });
+
     test('a dispose during registration silences the play waiting on it',
         () async {
       final handle = FlutterHaptics.register(
