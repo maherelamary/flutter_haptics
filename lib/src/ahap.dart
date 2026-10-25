@@ -174,9 +174,12 @@ abstract final class Ahap {
   /// Folds the curve that applies to this event into a [HapticParam].
   ///
   /// A curve is claimed by the event it starts on; failing that, by an event
-  /// already running when it starts. AHAP dynamic parameters are global in
-  /// principle, but every tool that writes them pairs a curve with the event
-  /// it shapes, and this package has nowhere to put a truly global one.
+  /// already running when it starts. An event is no longer running at its
+  /// own end: a curve starting there belongs to whatever starts there, and
+  /// claiming it would hand a flat rumble the shape of the one after it.
+  /// AHAP dynamic parameters are global in principle, but every tool that
+  /// writes them pairs a curve with the event it shapes, and this package has
+  /// nowhere to put a truly global one.
   static HapticParam _resolve({
     required List<_Curve> curves,
     required String parameterId,
@@ -190,7 +193,8 @@ abstract final class Ahap {
     final candidates = curves.where((c) => c.parameterId == parameterId);
 
     final curve = candidates.firstWhereOrNull((c) => _near(c.time, start)) ??
-        candidates.firstWhereOrNull((c) => c.time >= start && c.time <= end);
+        candidates.firstWhereOrNull(
+            (c) => c.time >= start && c.time < end && !_near(c.time, end));
 
     if (curve == null || curve.points.isEmpty) {
       return ConstantParam(fallback.clamp(0.0, 1.0));

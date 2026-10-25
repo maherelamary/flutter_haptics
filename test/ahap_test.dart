@@ -108,6 +108,42 @@ void main() {
           [0.5, 1.0]);
     });
 
+    test('a curve starting where an event ends is not claimed by it', () {
+      // 0.1 + 0.2 is 0.30000000000000004, so a curve at 0.3 sits a hair
+      // inside the event by arithmetic. It still starts on the event's end.
+      final pattern = Ahap.decode('''
+      {
+        "Pattern": [
+          { "Event": {
+              "Time": 0.1,
+              "EventType": "HapticContinuous",
+              "EventDuration": 0.2,
+              "EventParameters": [
+                { "ParameterID": "HapticIntensity", "ParameterValue": 0.6 },
+                { "ParameterID": "HapticSharpness", "ParameterValue": 0.4 }
+              ] } },
+          { "ParameterCurve": {
+              "ParameterID": "HapticIntensityControl",
+              "Time": 0.3,
+              "ParameterCurveControlPoints": [
+                { "Time": 0.0, "ParameterValue": 0.5 },
+                { "Time": 0.3, "ParameterValue": 0.0 }
+              ] } },
+          { "ParameterCurve": {
+              "ParameterID": "HapticSharpnessControl",
+              "Time": 0.3,
+              "ParameterCurveControlPoints": [
+                { "Time": 0.0, "ParameterValue": 0.2 },
+                { "Time": 0.3, "ParameterValue": 0.5 }
+              ] } }
+        ]
+      }''');
+
+      final event = pattern.events.single as ContinuousEvent;
+      expect(event.intensity, const ConstantParam(0.6));
+      expect(event.sharpness, const ConstantParam(0.4));
+    });
+
     test('a curve with no Time starts at zero, not at its first point', () {
       // A missing key takes its default, and Time defaults to 0. Falling
       // back to the first point's time is the absolute reading.
@@ -573,5 +609,68 @@ void main() {
 
       expectSameShape(Ahap.decode(Ahap.encode(pattern)), pattern);
     });
+
+    // Each pair touches: the second rumble starts on the instant the first
+    // ends, so the second's curve starts there too. The first must not take
+    // it — it has already finished by then.
+    const fade = HapticParam.linear(from: 0.5, to: 0);
+    const rise = HapticParam.linear(from: 0.2, to: 0.9);
+    for (final entry in <String, HapticPattern>{
+      'flat then curved intensity': (HapticPatternBuilder()
+            ..rumble(
+                duration: const Duration(milliseconds: 200),
+                intensity: 0.6,
+                sharpness: 0.4)
+            ..rumbleCurved(
+                duration: const Duration(milliseconds: 300),
+                intensity: fade,
+                sharpness: const HapticParam.constant(0.4)))
+          .build(),
+      'flat then curved sharpness': (HapticPatternBuilder()
+            ..rumble(
+                duration: const Duration(milliseconds: 200),
+                intensity: 0.6,
+                sharpness: 0.4)
+            ..rumbleCurved(
+                duration: const Duration(milliseconds: 300),
+                intensity: const HapticParam.constant(0.6),
+                sharpness: rise))
+          .build(),
+      'curved then curved intensity': (HapticPatternBuilder()
+            ..rumbleCurved(
+                duration: const Duration(milliseconds: 200),
+                intensity: rise,
+                sharpness: const HapticParam.constant(0.4))
+            ..rumbleCurved(
+                duration: const Duration(milliseconds: 300),
+                intensity: fade,
+                sharpness: const HapticParam.constant(0.4)))
+          .build(),
+      'curved then curved sharpness': (HapticPatternBuilder()
+            ..rumbleCurved(
+                duration: const Duration(milliseconds: 200),
+                intensity: const HapticParam.constant(0.6),
+                sharpness: rise)
+            ..rumbleCurved(
+                duration: const Duration(milliseconds: 300),
+                intensity: const HapticParam.constant(0.6),
+                sharpness: fade))
+          .build(),
+      // The first rumble's neutral reset lands where the second starts.
+      'curved then flat': (HapticPatternBuilder()
+            ..rumbleCurved(
+                duration: const Duration(milliseconds: 200),
+                intensity: fade,
+                sharpness: rise)
+            ..rumble(
+                duration: const Duration(milliseconds: 300),
+                intensity: 0.6,
+                sharpness: 0.4))
+          .build(),
+    }.entries) {
+      test('back-to-back rumbles keep their own curves: ${entry.key}', () {
+        expectSameShape(Ahap.decode(Ahap.encode(entry.value)), entry.value);
+      });
+    }
   });
 }
