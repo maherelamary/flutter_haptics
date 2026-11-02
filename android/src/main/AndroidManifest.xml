@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Required by Vibrator.vibrate() and Vibrator.cancel(). This is a normal
+       permission: it is granted at install time and never prompts the user.
+       Declaring it here merges it into every app that depends on the plugin. -->
+  <uses-permission android:name="android.permission.VIBRATE" />
+</manifest>

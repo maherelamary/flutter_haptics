@@ -1,0 +1,35 @@
+# NOTE: where a .pubignore exists, pub uses it INSTEAD of .gitignore for that
+# directory - it does not merge the two. So this file has to repeat everything
+# from .gitignore that must stay out of the published archive, not just the
+# extra entries. Keep it in sync when .gitignore changes.
+
+# Working notes that live in the repo but have no place in the package.
+claude-token-optimization-research.md
+
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# Flutter/Dart/Pub related
+/pubspec.lock
+**/doc/api/
+.dart_tool/
+.flutter-plugins-dependencies
+/build/
+/coverage/
